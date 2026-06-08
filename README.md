@@ -100,8 +100,10 @@ not the actual email addresses. If the public site is not protected with
 emails.
 
 When SMTP is configured, the app sends a short confirmation email immediately
-after a user subscribes from the web page. If SMTP is not configured, the
-address is still saved, but no confirmation email is sent.
+after a user subscribes from the web page. This confirmation is sent in the
+background so slow SMTP connections do not block the subscription request. If
+SMTP is not configured, the address is still saved, but no confirmation email
+is sent.
 
 ## Environment variables
 
@@ -136,6 +138,7 @@ address is still saved, but no confirmation email is sent.
   settings for digest emails when new papers are inserted.
 - `SMTP_SSL`: optional boolean. Defaults to true when `SMTP_PORT=465`.
 - `SMTP_STARTTLS`: optional boolean. Defaults to true when SSL is disabled.
+- `SMTP_TIMEOUT`: optional SMTP connection timeout in seconds. Defaults to `8`.
 - `MAIL_FROM`: optional sender address. Defaults to `SMTP_USER`.
 - `NOTIFY_EMAIL_TO`: optional comma-separated recipient list for digest
   emails. Web-page subscribers are also included.

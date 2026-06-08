@@ -14,6 +14,7 @@ import re
 import smtplib
 import sqlite3
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -124,6 +125,10 @@ def configured_smtp_starttls() -> bool:
     if value:
         return value in {"1", "true", "yes", "on"}
     return not configured_smtp_ssl()
+
+
+def configured_smtp_timeout() -> float:
+    return float(os.getenv("SMTP_TIMEOUT", "8") or "8")
 
 
 def configured_email_recipients() -> list[str]:
@@ -790,12 +795,13 @@ def send_email(subject: str, body: str, recipients: list[str]) -> None:
     message["To"] = ", ".join(recipients)
     message.set_content(body)
     port = configured_smtp_port()
+    timeout = configured_smtp_timeout()
     if configured_smtp_ssl():
-        with smtplib.SMTP_SSL(host, port, timeout=30) as smtp:
+        with smtplib.SMTP_SSL(host, port, timeout=timeout) as smtp:
             smtp.login(user, password)
             smtp.send_message(message)
         return
-    with smtplib.SMTP(host, port, timeout=30) as smtp:
+    with smtplib.SMTP(host, port, timeout=timeout) as smtp:
         if configured_smtp_starttls():
             smtp.starttls()
         smtp.login(user, password)
@@ -824,6 +830,38 @@ def send_subscription_confirmation(email: str) -> bool:
         return False
     subject, body = build_subscription_confirmation()
     send_email(subject, body, [email])
+    return True
+
+
+def mask_email(email: str) -> str:
+    name, sep, domain = email.partition("@")
+    if not sep:
+        return "***"
+    prefix = name[:2] if len(name) > 2 else name[:1]
+    return f"{prefix}***@{domain}"
+
+
+def send_subscription_confirmation_async(email: str) -> bool:
+    if not smtp_configured():
+        return False
+
+    def worker() -> None:
+        try:
+            send_subscription_confirmation(email)
+            print(
+                f"Subscription confirmation sent to {mask_email(email)}",
+                flush=True,
+            )
+        except Exception as exc:
+            print(
+                "Subscription confirmation failed for "
+                f"{mask_email(email)}: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
     return True
 
 
@@ -2072,6 +2110,8 @@ INDEX_HTML = r"""
         els.subscriberEmail.value = '';
         if (data.confirmation_sent) {
           els.subscriberNote.textContent = '已订阅，确认邮件已发送';
+        } else if (data.confirmation_queued) {
+          els.subscriberNote.textContent = '已保存邮箱，确认邮件稍后发送';
         } else if (data.confirmation_error) {
           els.subscriberNote.textContent = `已保存邮箱，但确认邮件发送失败：${data.confirmation_error}`;
         } else {
@@ -2267,10 +2307,12 @@ class PaperTrackerHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self.send_json({"error": str(exc)}, status=400)
             return
-        confirmation_sent = False
+        confirmation_queued = False
         confirmation_error = ""
         try:
-            confirmation_sent = send_subscription_confirmation(subscriber["email"])
+            confirmation_queued = send_subscription_confirmation_async(
+                subscriber["email"]
+            )
         except Exception as exc:
             confirmation_error = str(exc)
         self.send_json(
@@ -2280,7 +2322,8 @@ class PaperTrackerHandler(BaseHTTPRequestHandler):
                     self.db_path
                 ),
                 "smtp_configured": smtp_configured(),
-                "confirmation_sent": confirmation_sent,
+                "confirmation_queued": confirmation_queued,
+                "confirmation_sent": False,
                 "confirmation_error": confirmation_error,
             },
             status=201,
