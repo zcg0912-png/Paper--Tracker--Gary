@@ -99,6 +99,10 @@ not the actual email addresses. If the public site is not protected with
 `PAPER_TRACKER_PASSWORD`, anyone who can open the site can add subscriber
 emails.
 
+When SMTP is configured, the app sends a short confirmation email immediately
+after a user subscribes from the web page. If SMTP is not configured, the
+address is still saved, but no confirmation email is sent.
+
 ## Environment variables
 
 - `PAPER_TRACKER_DB`: SQLite database path. Use `/data/papers.db` on Railway

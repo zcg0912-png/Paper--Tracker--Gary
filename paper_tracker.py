@@ -802,6 +802,31 @@ def send_email(subject: str, body: str, recipients: list[str]) -> None:
         smtp.send_message(message)
 
 
+def build_subscription_confirmation() -> tuple[str, str]:
+    prefix = os.getenv("NOTIFY_EMAIL_SUBJECT_PREFIX", "论文追索").strip() or "论文追索"
+    subject = f"{prefix}: 邮件提醒订阅成功"
+    body = "\n".join(
+        [
+            "你已成功订阅论文追索的新增论文邮件提醒。",
+            "",
+            "之后只要系统抓取到新论文，就会向这个邮箱发送汇总邮件。",
+            "",
+            "如果这不是你本人操作，可以忽略这封邮件。",
+            "",
+            "这封邮件由论文追索自动发送。",
+        ]
+    )
+    return subject, body + "\n"
+
+
+def send_subscription_confirmation(email: str) -> bool:
+    if not smtp_configured():
+        return False
+    subject, body = build_subscription_confirmation()
+    send_email(subject, body, [email])
+    return True
+
+
 def notify_new_papers(papers: list[dict[str, str]], db_path: Path) -> dict:
     recipients = notification_recipients(db_path)
     if not papers:
@@ -1870,6 +1895,7 @@ INDEX_HTML = r"""
       });
       const data = await readJsonResponse(res, '订阅失败');
       renderSubscribers(data);
+      return data;
     }
 
     function renderJournalStats() {
@@ -2042,9 +2068,16 @@ INDEX_HTML = r"""
       button.disabled = true;
       button.textContent = '保存中...';
       try {
-        await addSubscriber(email);
+        const data = await addSubscriber(email);
         els.subscriberEmail.value = '';
-        button.textContent = '已订阅';
+        if (data.confirmation_sent) {
+          els.subscriberNote.textContent = '已订阅，确认邮件已发送';
+        } else if (data.confirmation_error) {
+          els.subscriberNote.textContent = `已保存邮箱，但确认邮件发送失败：${data.confirmation_error}`;
+        } else {
+          els.subscriberNote.textContent = '已保存邮箱；配置 SMTP 后开始发送提醒';
+        }
+        button.textContent = '已保存';
         setTimeout(() => { button.textContent = '订阅提醒'; }, 1200);
       } catch (error) {
         els.subscriberNote.textContent = error.message || '订阅失败';
@@ -2230,10 +2263,16 @@ class PaperTrackerHandler(BaseHTTPRequestHandler):
         payload = self.read_json_body()
         email = str(payload.get("email") or "")
         try:
-            add_subscriber(email, self.db_path)
+            subscriber = add_subscriber(email, self.db_path)
         except ValueError as exc:
             self.send_json({"error": str(exc)}, status=400)
             return
+        confirmation_sent = False
+        confirmation_error = ""
+        try:
+            confirmation_sent = send_subscription_confirmation(subscriber["email"])
+        except Exception as exc:
+            confirmation_error = str(exc)
         self.send_json(
             {
                 "subscriber_count": len(list_subscribers(self.db_path)),
@@ -2241,6 +2280,8 @@ class PaperTrackerHandler(BaseHTTPRequestHandler):
                     self.db_path
                 ),
                 "smtp_configured": smtp_configured(),
+                "confirmation_sent": confirmation_sent,
+                "confirmation_error": confirmation_error,
             },
             status=201,
         )
