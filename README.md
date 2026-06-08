@@ -98,6 +98,7 @@ new-paper digest emails are sent. The web page only shows subscription counts,
 not the actual email addresses. If the public site is not protected with
 `PAPER_TRACKER_PASSWORD`, anyone who can open the site can add subscriber
 emails.
+The same panel can clear all stored subscriber emails without revealing them.
 
 When SMTP is configured, the app sends a short confirmation email immediately
 after a user subscribes from the web page. This confirmation is sent in the

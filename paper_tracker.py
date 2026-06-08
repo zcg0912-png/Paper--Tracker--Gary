@@ -1012,6 +1012,28 @@ def remove_subscriber(email: str, db_path: Path = DEFAULT_DB) -> None:
         )
 
 
+def clear_subscribers(db_path: Path = DEFAULT_DB) -> int:
+    init_db(db_path)
+    with sqlite3.connect(db_path) as conn:
+        count = int(
+            conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM email_subscribers
+                WHERE is_active = 1
+                """
+            ).fetchone()[0]
+        )
+        conn.execute(
+            """
+            UPDATE email_subscribers
+            SET is_active = 0
+            WHERE is_active = 1
+            """
+        )
+    return count
+
+
 def paper_filters(journal: str, q: str, days: int) -> tuple[str, list[str | int]]:
     where = []
     params: list[str | int] = []
@@ -1783,6 +1805,7 @@ INDEX_HTML = r"""
               </label>
               <button type="submit">订阅提醒</button>
             </form>
+            <button class="text-button" type="button" id="subscriber-clear">清空订阅邮箱</button>
           </section>
           <nav class="panel journal-panel" id="journal-list"></nav>
         </aside>
@@ -1820,6 +1843,7 @@ INDEX_HTML = r"""
       statVisible: document.getElementById('stat-visible'),
       subscriberForm: document.getElementById('subscriber-form'),
       subscriberEmail: document.getElementById('subscriber-email'),
+      subscriberClear: document.getElementById('subscriber-clear'),
       subscriberNote: document.getElementById('subscriber-note')
     };
 
@@ -1932,6 +1956,16 @@ INDEX_HTML = r"""
         body: JSON.stringify({ email })
       });
       const data = await readJsonResponse(res, '订阅失败');
+      renderSubscribers(data);
+      return data;
+    }
+
+    async function clearSubscribers() {
+      const res = await fetch('/api/subscribers/clear', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const data = await readJsonResponse(res, '清空订阅失败');
       renderSubscribers(data);
       return data;
     }
@@ -2124,6 +2158,24 @@ INDEX_HTML = r"""
         button.textContent = '重试订阅';
       } finally {
         button.disabled = false;
+      }
+    });
+
+    els.subscriberClear.addEventListener('click', async () => {
+      if (!confirm('确定要清空所有订阅邮箱吗？')) return;
+      els.subscriberClear.disabled = true;
+      els.subscriberClear.textContent = '清空中...';
+      try {
+        const data = await clearSubscribers();
+        const removed = Number(data.removed_count || 0);
+        els.subscriberNote.textContent = removed ?
+          `已清空 ${formatNumber(removed)} 个订阅邮箱` :
+          '当前没有订阅邮箱';
+      } catch (error) {
+        els.subscriberNote.textContent = error.message || '清空订阅失败';
+      } finally {
+        els.subscriberClear.disabled = false;
+        els.subscriberClear.textContent = '清空订阅邮箱';
       }
     });
 
@@ -2348,6 +2400,20 @@ class PaperTrackerHandler(BaseHTTPRequestHandler):
             }
         )
 
+    def handle_clear_subscribers(self) -> None:
+        removed = clear_subscribers(self.db_path)
+        self.send_json(
+            {
+                "ok": True,
+                "removed_count": removed,
+                "subscriber_count": len(list_subscribers(self.db_path)),
+                "email_notifications_enabled": email_notifications_enabled(
+                    self.db_path
+                ),
+                "smtp_configured": smtp_configured(),
+            }
+        )
+
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         query = urllib.parse.parse_qs(parsed.query)
@@ -2421,6 +2487,12 @@ class PaperTrackerHandler(BaseHTTPRequestHandler):
                 self.handle_translate()
             except json.JSONDecodeError:
                 self.send_json({"error": "Invalid JSON body"}, status=400)
+            except Exception as exc:
+                self.send_json({"error": str(exc)}, status=500)
+            return
+        if parsed.path == "/api/subscribers/clear":
+            try:
+                self.handle_clear_subscribers()
             except Exception as exc:
                 self.send_json({"error": str(exc)}, status=500)
             return
