@@ -11,12 +11,14 @@ import html as html_lib
 import json
 import os
 import re
+import smtplib
 import sqlite3
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import xml.etree.ElementTree as ET
@@ -103,6 +105,40 @@ def configured_mymemory_model_label() -> str:
     source = configured_mymemory_source_lang()
     target = configured_mymemory_target_lang()
     return f"mymemory:{source}-{target.lower()}"
+
+
+def configured_smtp_port() -> int:
+    return int(os.getenv("SMTP_PORT", "465") or "465")
+
+
+def configured_smtp_ssl() -> bool:
+    value = os.getenv("SMTP_SSL", "").strip().lower()
+    if value:
+        return value in {"1", "true", "yes", "on"}
+    return configured_smtp_port() == 465
+
+
+def configured_smtp_starttls() -> bool:
+    value = os.getenv("SMTP_STARTTLS", "").strip().lower()
+    if value:
+        return value in {"1", "true", "yes", "on"}
+    return not configured_smtp_ssl()
+
+
+def configured_email_recipients() -> list[str]:
+    value = os.getenv("NOTIFY_EMAIL_TO", "").strip()
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def email_notifications_enabled() -> bool:
+    return bool(
+        os.getenv("SMTP_HOST", "").strip()
+        and os.getenv("SMTP_USER", "").strip()
+        and os.getenv("SMTP_PASSWORD", "").strip()
+        and configured_email_recipients()
+    )
 
 
 def load_journals(path: Path = DEFAULT_JOURNALS) -> list[dict[str, str]]:
@@ -587,10 +623,23 @@ def fetch_hbr_feed(
     return papers
 
 
+def paper_digest_row(paper: dict[str, str | int]) -> dict[str, str]:
+    return {
+        "paper_key": str(paper.get("paper_key") or ""),
+        "title": str(paper.get("title") or "Untitled"),
+        "authors": str(paper.get("authors") or ""),
+        "journal": str(paper.get("journal") or ""),
+        "publication_date": str(paper.get("publication_date") or ""),
+        "doi": str(paper.get("doi") or ""),
+        "article_url": str(paper.get("article_url") or ""),
+    }
+
+
 def upsert_papers(papers: list[dict[str, str | int]], db_path: Path = DEFAULT_DB) -> dict:
     init_db(db_path)
     inserted = 0
     updated = 0
+    new_papers: list[dict[str, str]] = []
     with sqlite3.connect(db_path) as conn:
         for paper in papers:
             exists = conn.execute(
@@ -634,7 +683,100 @@ def upsert_papers(papers: list[dict[str, str | int]], db_path: Path = DEFAULT_DB
                 updated += 1
             else:
                 inserted += 1
-    return {"inserted": inserted, "updated": updated, "seen": len(papers)}
+                new_papers.append(paper_digest_row(paper))
+    return {
+        "inserted": inserted,
+        "updated": updated,
+        "seen": len(papers),
+        "new_papers": new_papers,
+    }
+
+
+def group_papers_by_journal(papers: list[dict[str, str]]) -> dict[str, list[dict[str, str]]]:
+    grouped: dict[str, list[dict[str, str]]] = {}
+    for paper in papers:
+        journal = paper.get("journal") or "Unknown journal"
+        grouped.setdefault(journal, []).append(paper)
+    return grouped
+
+
+def build_email_digest(papers: list[dict[str, str]]) -> tuple[str, str]:
+    max_papers = int(os.getenv("NOTIFY_MAX_PAPERS", "50") or "50")
+    visible = papers[:max_papers]
+    today_text = today().isoformat()
+    prefix = os.getenv("NOTIFY_EMAIL_SUBJECT_PREFIX", "论文追索").strip() or "论文追索"
+    subject = f"{prefix}: 新增 {len(papers)} 篇论文 ({today_text})"
+    lines = [
+        f"本次更新新增 {len(papers)} 篇论文。",
+        "",
+    ]
+    for journal, rows in group_papers_by_journal(visible).items():
+        lines.append(journal)
+        lines.append("-" * min(len(journal), 60))
+        for index, paper in enumerate(rows, start=1):
+            title = paper.get("title") or "Untitled"
+            authors = paper.get("authors") or "作者未知"
+            date = paper.get("publication_date") or "-"
+            url = paper.get("article_url") or ""
+            doi = paper.get("doi") or ""
+            lines.append(f"{index}. {title}")
+            lines.append(f"   日期: {date}")
+            lines.append(f"   作者: {authors}")
+            if doi:
+                lines.append(f"   DOI: {doi}")
+            if url:
+                lines.append(f"   链接: {url}")
+            lines.append("")
+        lines.append("")
+    if len(papers) > len(visible):
+        lines.append(f"还有 {len(papers) - len(visible)} 篇未列出，请打开网站查看完整列表。")
+        lines.append("")
+    lines.append("这封邮件由论文追索自动发送。")
+    return subject, "\n".join(lines).strip() + "\n"
+
+
+def send_email(subject: str, body: str) -> None:
+    host = os.getenv("SMTP_HOST", "").strip()
+    user = os.getenv("SMTP_USER", "").strip()
+    password = os.getenv("SMTP_PASSWORD", "").strip()
+    recipients = configured_email_recipients()
+    sender = os.getenv("MAIL_FROM", "").strip() or user
+    if not host or not user or not password or not recipients or not sender:
+        raise RuntimeError("Email notification SMTP settings are incomplete")
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = sender
+    message["To"] = ", ".join(recipients)
+    message.set_content(body)
+    port = configured_smtp_port()
+    if configured_smtp_ssl():
+        with smtplib.SMTP_SSL(host, port, timeout=30) as smtp:
+            smtp.login(user, password)
+            smtp.send_message(message)
+        return
+    with smtplib.SMTP(host, port, timeout=30) as smtp:
+        if configured_smtp_starttls():
+            smtp.starttls()
+        smtp.login(user, password)
+        smtp.send_message(message)
+
+
+def notify_new_papers(papers: list[dict[str, str]]) -> dict:
+    if not papers:
+        return {"enabled": email_notifications_enabled(), "sent": False, "count": 0}
+    if not email_notifications_enabled():
+        return {"enabled": False, "sent": False, "count": len(papers)}
+    subject, body = build_email_digest(papers)
+    try:
+        send_email(subject, body)
+    except Exception as exc:
+        return {
+            "enabled": True,
+            "sent": False,
+            "count": len(papers),
+            "error": str(exc),
+        }
+    return {"enabled": True, "sent": True, "count": len(papers)}
 
 
 def fetch_all(
@@ -653,7 +795,13 @@ def fetch_all(
             raise ValueError(f"Unknown journal: {journal_name}")
 
     since = (today() - dt.timedelta(days=days)).isoformat()
-    totals = {"inserted": 0, "updated": 0, "seen": 0, "journals": []}
+    totals = {
+        "inserted": 0,
+        "updated": 0,
+        "seen": 0,
+        "journals": [],
+        "new_papers": [],
+    }
     for journal in journals:
         if journal["name"] == "Harvard Business Review":
             papers = fetch_hbr_feed(journal, since=since, limit=per_page * pages)
@@ -665,12 +813,16 @@ def fetch_all(
         totals["inserted"] += result["inserted"]
         totals["updated"] += result["updated"]
         totals["seen"] += result["seen"]
-        totals["journals"].append({"journal": journal["name"], **result})
+        totals["new_papers"].extend(result.get("new_papers", []))
+        journal_result = dict(result)
+        journal_result.pop("new_papers", None)
+        totals["journals"].append({"journal": journal["name"], **journal_result})
         print(
             f"{journal['name']}: {result['seen']} seen, "
             f"{result['inserted']} new, {result['updated']} updated",
             flush=True,
         )
+    totals["notification"] = notify_new_papers(totals["new_papers"])
     return totals
 
 

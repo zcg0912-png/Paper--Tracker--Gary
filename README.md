@@ -75,6 +75,23 @@ export MYMEMORY_EMAIL="you@example.com"
 # export DEEPL_SOURCE_LANG="EN"
 ```
 
+Email notification is optional. When SMTP variables are configured, each fetch
+run sends one digest email if new papers were inserted. No email is sent when
+there are no new papers:
+
+```bash
+export SMTP_HOST="smtp.example.com"
+export SMTP_PORT="465"
+export SMTP_USER="you@example.com"
+export SMTP_PASSWORD="your_smtp_authorization_code"
+export MAIL_FROM="you@example.com"
+export NOTIFY_EMAIL_TO="you@example.com"
+```
+
+For many mailboxes, `SMTP_PASSWORD` is an app password or SMTP authorization
+code, not the account login password. Port `465` uses SSL by default. Port
+`587` uses STARTTLS by default.
+
 ## Environment variables
 
 - `PAPER_TRACKER_DB`: SQLite database path. Use `/data/papers.db` on Railway
@@ -104,6 +121,16 @@ export MYMEMORY_EMAIL="you@example.com"
 - `DEEPL_SOURCE_LANG`: optional DeepL source language. Defaults to `EN`.
 - `DEEPL_API_URL`: optional DeepL API base URL. Defaults to the Free API URL
   for Free keys and the Pro URL for Pro keys.
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`: optional SMTP
+  settings for digest emails when new papers are inserted.
+- `SMTP_SSL`: optional boolean. Defaults to true when `SMTP_PORT=465`.
+- `SMTP_STARTTLS`: optional boolean. Defaults to true when SSL is disabled.
+- `MAIL_FROM`: optional sender address. Defaults to `SMTP_USER`.
+- `NOTIFY_EMAIL_TO`: comma-separated recipient list for digest emails.
+- `NOTIFY_EMAIL_SUBJECT_PREFIX`: optional subject prefix. Defaults to
+  `论文追索`.
+- `NOTIFY_MAX_PAPERS`: optional maximum number of papers listed in one email.
+  Defaults to `50`.
 
 ## Railway deployment
 
@@ -119,6 +146,12 @@ PAPER_TRACKER_CRON_SECRET=<choose-a-second-strong-secret>
 OPENALEX_MAILTO=<your-email>
 PAPER_TRACKER_TRANSLATION_PROVIDER=auto
 MYMEMORY_EMAIL=<your-email>
+SMTP_HOST=<your-smtp-host>
+SMTP_PORT=465
+SMTP_USER=<your-email>
+SMTP_PASSWORD=<your-smtp-authorization-code>
+MAIL_FROM=<your-email>
+NOTIFY_EMAIL_TO=<recipient-email>
 ```
 
 4. Add a Railway volume mounted at:
