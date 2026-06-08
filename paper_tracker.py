@@ -1882,8 +1882,6 @@ INDEX_HTML = r"""
               </label>
               <button type="submit">订阅提醒</button>
             </form>
-            <button class="text-button" type="button" id="subscriber-test">发送测试邮件</button>
-            <button class="text-button" type="button" id="subscriber-clear">清空订阅邮箱</button>
           </section>
           <nav class="panel journal-panel" id="journal-list"></nav>
         </aside>
@@ -1921,8 +1919,6 @@ INDEX_HTML = r"""
       statVisible: document.getElementById('stat-visible'),
       subscriberForm: document.getElementById('subscriber-form'),
       subscriberEmail: document.getElementById('subscriber-email'),
-      subscriberTest: document.getElementById('subscriber-test'),
-      subscriberClear: document.getElementById('subscriber-clear'),
       subscriberNote: document.getElementById('subscriber-note')
     };
 
@@ -2037,25 +2033,6 @@ INDEX_HTML = r"""
       const data = await readJsonResponse(res, '订阅失败');
       renderSubscribers(data);
       return data;
-    }
-
-    async function clearSubscribers() {
-      const res = await fetch('/api/subscribers/clear', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-      });
-      const data = await readJsonResponse(res, '清空订阅失败');
-      renderSubscribers(data);
-      return data;
-    }
-
-    async function sendTestEmail(email) {
-      const res = await fetch('/api/notifications/test-email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email })
-      });
-      return readJsonResponse(res, '发送测试邮件失败');
     }
 
     function renderJournalStats() {
@@ -2246,43 +2223,6 @@ INDEX_HTML = r"""
         button.textContent = '重试订阅';
       } finally {
         button.disabled = false;
-      }
-    });
-
-    els.subscriberClear.addEventListener('click', async () => {
-      if (!confirm('确定要清空所有订阅邮箱吗？')) return;
-      els.subscriberClear.disabled = true;
-      els.subscriberClear.textContent = '清空中...';
-      try {
-        const data = await clearSubscribers();
-        const removed = Number(data.removed_count || 0);
-        els.subscriberNote.textContent = removed ?
-          `已清空 ${formatNumber(removed)} 个订阅邮箱` :
-          '当前没有订阅邮箱';
-      } catch (error) {
-        els.subscriberNote.textContent = error.message || '清空订阅失败';
-      } finally {
-        els.subscriberClear.disabled = false;
-        els.subscriberClear.textContent = '清空订阅邮箱';
-      }
-    });
-
-    els.subscriberTest.addEventListener('click', async () => {
-      const email = els.subscriberEmail.value.trim();
-      if (!email) {
-        els.subscriberNote.textContent = '请先在输入框里填一个测试收件邮箱';
-        return;
-      }
-      els.subscriberTest.disabled = true;
-      els.subscriberTest.textContent = '发送中...';
-      try {
-        await sendTestEmail(email);
-        els.subscriberNote.textContent = '测试邮件已发送，请检查收件箱和垃圾箱';
-      } catch (error) {
-        els.subscriberNote.textContent = error.message || '发送测试邮件失败';
-      } finally {
-        els.subscriberTest.disabled = false;
-        els.subscriberTest.textContent = '发送测试邮件';
       }
     });
 
