@@ -1845,6 +1845,22 @@ INDEX_HTML = r"""
       return p;
     }
 
+    async function readJsonResponse(res, fallbackMessage) {
+      const text = await res.text();
+      let data = {};
+      if (text) {
+        try {
+          data = JSON.parse(text);
+        } catch (error) {
+          throw new Error(`${fallbackMessage}：接口返回了非 JSON 内容 (${res.status})`);
+        }
+      }
+      if (!res.ok) {
+        throw new Error(data.error || `${fallbackMessage}：HTTP ${res.status}`);
+      }
+      return data;
+    }
+
     async function loadJournals() {
       const res = await fetch('/api/journals');
       state.journals = await res.json();
@@ -1859,10 +1875,14 @@ INDEX_HTML = r"""
     }
 
     async function loadSubscribers() {
-      const res = await fetch('/api/subscribers');
-      const data = await res.json();
-      state.subscribers = data.subscribers || [];
-      renderSubscribers(data);
+      try {
+        const res = await fetch('/api/subscribers');
+        const data = await readJsonResponse(res, '加载订阅列表失败');
+        state.subscribers = data.subscribers || [];
+        renderSubscribers(data);
+      } catch (error) {
+        els.subscriberNote.textContent = error.message || '加载订阅列表失败';
+      }
     }
 
     function renderSubscribers(data = {}) {
@@ -1890,8 +1910,7 @@ INDEX_HTML = r"""
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email })
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || '订阅失败');
+      const data = await readJsonResponse(res, '订阅失败');
       state.subscribers = data.subscribers || [];
       renderSubscribers(data);
     }
@@ -1902,8 +1921,7 @@ INDEX_HTML = r"""
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email })
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || '移除失败');
+      const data = await readJsonResponse(res, '移除失败');
       state.subscribers = data.subscribers || [];
       renderSubscribers(data);
     }
