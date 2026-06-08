@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.env
+papers.db
+papers.db-shm
+papers.db-wal
+.paper_tracker_server.log
