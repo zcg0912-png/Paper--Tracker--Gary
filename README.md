@@ -92,6 +92,12 @@ For many mailboxes, `SMTP_PASSWORD` is an app password or SMTP authorization
 code, not the account login password. Port `465` uses SSL by default. Port
 `587` uses STARTTLS by default.
 
+Users can also subscribe from the web page's email reminder panel. Those
+addresses are stored in SQLite and are included with `NOTIFY_EMAIL_TO` when
+new-paper digest emails are sent. If the public site is not protected with
+`PAPER_TRACKER_PASSWORD`, anyone who can open the site can add or remove
+subscriber emails.
+
 ## Environment variables
 
 - `PAPER_TRACKER_DB`: SQLite database path. Use `/data/papers.db` on Railway
@@ -126,7 +132,8 @@ code, not the account login password. Port `465` uses SSL by default. Port
 - `SMTP_SSL`: optional boolean. Defaults to true when `SMTP_PORT=465`.
 - `SMTP_STARTTLS`: optional boolean. Defaults to true when SSL is disabled.
 - `MAIL_FROM`: optional sender address. Defaults to `SMTP_USER`.
-- `NOTIFY_EMAIL_TO`: comma-separated recipient list for digest emails.
+- `NOTIFY_EMAIL_TO`: optional comma-separated recipient list for digest
+  emails. Web-page subscribers are also included.
 - `NOTIFY_EMAIL_SUBJECT_PREFIX`: optional subject prefix. Defaults to
   `论文追索`.
 - `NOTIFY_MAX_PAPERS`: optional maximum number of papers listed in one email.

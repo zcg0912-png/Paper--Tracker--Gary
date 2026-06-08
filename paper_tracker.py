@@ -32,6 +32,7 @@ HBR_FEED_URL = "http://feeds.harvardbusiness.org/harvardbusiness"
 DEEPL_FREE_API_URL = "https://api-free.deepl.com"
 MYMEMORY_TRANSLATE_URL = "https://api.mymemory.translated.net/get"
 TAG_RE = re.compile(r"<[^>]+>")
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 AUTH_REALM = "Paper Tracker"
 
 
@@ -132,13 +133,28 @@ def configured_email_recipients() -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-def email_notifications_enabled() -> bool:
+def smtp_configured() -> bool:
     return bool(
         os.getenv("SMTP_HOST", "").strip()
         and os.getenv("SMTP_USER", "").strip()
         and os.getenv("SMTP_PASSWORD", "").strip()
-        and configured_email_recipients()
     )
+
+
+def email_notifications_enabled(db_path: Path | None = None) -> bool:
+    if not smtp_configured():
+        return False
+    if configured_email_recipients():
+        return True
+    return bool(list_subscriber_emails(db_path)) if db_path else False
+
+
+def normalize_email(value: str) -> str:
+    return " ".join(value.strip().lower().split())
+
+
+def is_valid_email(value: str) -> bool:
+    return bool(EMAIL_RE.match(value))
 
 
 def load_journals(path: Path = DEFAULT_JOURNALS) -> list[dict[str, str]]:
@@ -204,6 +220,21 @@ def init_db(db_path: Path = DEFAULT_DB) -> None:
             """
             CREATE INDEX IF NOT EXISTS idx_paper_translations_hash
             ON paper_translations(source_hash)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS email_subscribers (
+                email TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_email_subscribers_active
+            ON email_subscribers(is_active)
             """
         )
 
@@ -735,11 +766,21 @@ def build_email_digest(papers: list[dict[str, str]]) -> tuple[str, str]:
     return subject, "\n".join(lines).strip() + "\n"
 
 
-def send_email(subject: str, body: str) -> None:
+def notification_recipients(db_path: Path) -> list[str]:
+    seen: set[str] = set()
+    recipients: list[str] = []
+    for email in [*configured_email_recipients(), *list_subscriber_emails(db_path)]:
+        normalized = normalize_email(email)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            recipients.append(normalized)
+    return recipients
+
+
+def send_email(subject: str, body: str, recipients: list[str]) -> None:
     host = os.getenv("SMTP_HOST", "").strip()
     user = os.getenv("SMTP_USER", "").strip()
     password = os.getenv("SMTP_PASSWORD", "").strip()
-    recipients = configured_email_recipients()
     sender = os.getenv("MAIL_FROM", "").strip() or user
     if not host or not user or not password or not recipients or not sender:
         raise RuntimeError("Email notification SMTP settings are incomplete")
@@ -761,22 +802,34 @@ def send_email(subject: str, body: str) -> None:
         smtp.send_message(message)
 
 
-def notify_new_papers(papers: list[dict[str, str]]) -> dict:
+def notify_new_papers(papers: list[dict[str, str]], db_path: Path) -> dict:
+    recipients = notification_recipients(db_path)
     if not papers:
-        return {"enabled": email_notifications_enabled(), "sent": False, "count": 0}
-    if not email_notifications_enabled():
+        return {
+            "enabled": smtp_configured() and bool(recipients),
+            "sent": False,
+            "count": 0,
+            "recipients": len(recipients),
+        }
+    if not smtp_configured() or not recipients:
         return {"enabled": False, "sent": False, "count": len(papers)}
     subject, body = build_email_digest(papers)
     try:
-        send_email(subject, body)
+        send_email(subject, body, recipients)
     except Exception as exc:
         return {
             "enabled": True,
             "sent": False,
             "count": len(papers),
+            "recipients": len(recipients),
             "error": str(exc),
         }
-    return {"enabled": True, "sent": True, "count": len(papers)}
+    return {
+        "enabled": True,
+        "sent": True,
+        "count": len(papers),
+        "recipients": len(recipients),
+    }
 
 
 def fetch_all(
@@ -822,13 +875,78 @@ def fetch_all(
             f"{result['inserted']} new, {result['updated']} updated",
             flush=True,
         )
-    totals["notification"] = notify_new_papers(totals["new_papers"])
+    totals["notification"] = notify_new_papers(totals["new_papers"], db_path)
     return totals
 
 
 def rows_to_dicts(cursor: sqlite3.Cursor) -> list[dict]:
     columns = [column[0] for column in cursor.description]
     return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
+def list_subscribers(db_path: Path = DEFAULT_DB) -> list[dict]:
+    init_db(db_path)
+    with sqlite3.connect(db_path) as conn:
+        return rows_to_dicts(
+            conn.execute(
+                """
+                SELECT email, created_at
+                FROM email_subscribers
+                WHERE is_active = 1
+                ORDER BY created_at DESC
+                """
+            )
+        )
+
+
+def list_subscriber_emails(db_path: Path | None = None) -> list[str]:
+    if db_path is None:
+        return []
+    return [row["email"] for row in list_subscribers(db_path)]
+
+
+def add_subscriber(email: str, db_path: Path = DEFAULT_DB) -> dict:
+    normalized = normalize_email(email)
+    if not is_valid_email(normalized):
+        raise ValueError("请输入有效的邮箱地址")
+    created_at = utc_now()
+    init_db(db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO email_subscribers (email, created_at, is_active)
+            VALUES (?, ?, 1)
+            ON CONFLICT(email) DO UPDATE SET
+                is_active = 1
+            """,
+            (normalized, created_at),
+        )
+        row = conn.execute(
+            """
+            SELECT email, created_at
+            FROM email_subscribers
+            WHERE email = ?
+            """,
+            (normalized,),
+        )
+        rows = rows_to_dicts(row)
+    return rows[0]
+
+
+def remove_subscriber(email: str, db_path: Path = DEFAULT_DB) -> None:
+    normalized = normalize_email(email)
+    if not is_valid_email(normalized):
+        raise ValueError("请输入有效的邮箱地址")
+    init_db(db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE email_subscribers
+            SET is_active = 0
+            WHERE email = ?
+            """,
+            (normalized,),
+        )
 
 
 def paper_filters(journal: str, q: str, days: int) -> tuple[str, list[str | int]]:
@@ -1139,6 +1257,10 @@ INDEX_HTML = r"""
       cursor: pointer;
       font-weight: 650;
     }
+    button:disabled {
+      cursor: wait;
+      opacity: 0.62;
+    }
     main {
       padding: 24px 24px 56px;
     }
@@ -1190,6 +1312,51 @@ INDEX_HTML = r"""
       max-height: calc(100vh - 230px);
       overflow: auto;
       padding: 8px;
+    }
+    .subscribe-panel {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+    }
+    .subscribe-title {
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 800;
+    }
+    .subscribe-form {
+      display: grid;
+      gap: 8px;
+    }
+    .subscriber-list {
+      display: grid;
+      gap: 6px;
+    }
+    .subscriber-row {
+      align-items: center;
+      background: var(--panel-soft);
+      border-radius: 7px;
+      color: #3d4b60;
+      display: grid;
+      gap: 8px;
+      grid-template-columns: minmax(0, 1fr) auto;
+      min-height: 34px;
+      padding: 7px 9px;
+    }
+    .subscriber-email {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .subscriber-remove {
+      background: transparent;
+      border: 0;
+      color: #9f1239;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 750;
+      min-height: 24px;
+      padding: 0;
+      width: auto;
     }
     .journal-button {
       align-items: center;
@@ -1572,6 +1739,20 @@ INDEX_HTML = r"""
               <div class="stat-value" id="stat-visible">0</div>
             </div>
           </section>
+          <section class="panel subscribe-panel" aria-label="邮件提醒">
+            <div>
+              <div class="subscribe-title">邮件提醒</div>
+              <div class="muted-note" id="subscriber-note">新增论文时发送汇总邮件</div>
+            </div>
+            <form class="subscribe-form" id="subscriber-form">
+              <label class="field">
+                <span class="field-label">收件邮箱</span>
+                <input id="subscriber-email" type="email" placeholder="you@example.com" autocomplete="email">
+              </label>
+              <button type="submit">订阅提醒</button>
+            </form>
+            <div class="subscriber-list" id="subscriber-list"></div>
+          </section>
           <nav class="panel journal-panel" id="journal-list"></nav>
         </aside>
         <section class="results" aria-label="论文列表">
@@ -1588,7 +1769,12 @@ INDEX_HTML = r"""
     </div>
   </main>
   <script>
-    const state = { journals: [], selectedJournal: '', translations: new Map() };
+    const state = {
+      journals: [],
+      selectedJournal: '',
+      subscribers: [],
+      translations: new Map()
+    };
     const els = {
       query: document.getElementById('query'),
       journal: document.getElementById('journal'),
@@ -1601,7 +1787,11 @@ INDEX_HTML = r"""
       journalList: document.getElementById('journal-list'),
       statTotal: document.getElementById('stat-total'),
       statJournals: document.getElementById('stat-journals'),
-      statVisible: document.getElementById('stat-visible')
+      statVisible: document.getElementById('stat-visible'),
+      subscriberForm: document.getElementById('subscriber-form'),
+      subscriberEmail: document.getElementById('subscriber-email'),
+      subscriberList: document.getElementById('subscriber-list'),
+      subscriberNote: document.getElementById('subscriber-note')
     };
 
     function escapeHtml(value) {
@@ -1666,6 +1856,56 @@ INDEX_HTML = r"""
         }).join('');
       renderJournalList();
       renderJournalStats();
+    }
+
+    async function loadSubscribers() {
+      const res = await fetch('/api/subscribers');
+      const data = await res.json();
+      state.subscribers = data.subscribers || [];
+      renderSubscribers(data);
+    }
+
+    function renderSubscribers(data = {}) {
+      const smtpConfigured = Boolean(data.smtp_configured);
+      if (!smtpConfigured) {
+        els.subscriberNote.textContent = '邮箱会保存；配置 SMTP 后开始发送提醒';
+      } else if (state.subscribers.length) {
+        els.subscriberNote.textContent = `已订阅 ${formatNumber(state.subscribers.length)} 个邮箱`;
+      } else {
+        els.subscriberNote.textContent = '新增论文时发送汇总邮件';
+      }
+      els.subscriberList.innerHTML = state.subscribers.length ?
+        state.subscribers.map(subscriber => `
+          <div class="subscriber-row">
+            <span class="subscriber-email">${escapeHtml(subscriber.email)}</span>
+            <button class="subscriber-remove" type="button" data-remove-subscriber="${escapeHtml(subscriber.email)}">移除</button>
+          </div>
+        `).join('') :
+        '<div class="muted-note">还没有前端订阅邮箱。</div>';
+    }
+
+    async function addSubscriber(email) {
+      const res = await fetch('/api/subscribers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '订阅失败');
+      state.subscribers = data.subscribers || [];
+      renderSubscribers(data);
+    }
+
+    async function removeSubscriber(email) {
+      const res = await fetch('/api/subscribers', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '移除失败');
+      state.subscribers = data.subscribers || [];
+      renderSubscribers(data);
     }
 
     function renderJournalStats() {
@@ -1830,6 +2070,41 @@ INDEX_HTML = r"""
       loadPapers();
     });
 
+    els.subscriberForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      const email = els.subscriberEmail.value.trim();
+      if (!email) return;
+      const button = els.subscriberForm.querySelector('button[type="submit"]');
+      button.disabled = true;
+      button.textContent = '保存中...';
+      try {
+        await addSubscriber(email);
+        els.subscriberEmail.value = '';
+        button.textContent = '已订阅';
+        setTimeout(() => { button.textContent = '订阅提醒'; }, 1200);
+      } catch (error) {
+        els.subscriberNote.textContent = error.message || '订阅失败';
+        button.textContent = '重试订阅';
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    els.subscriberList.addEventListener('click', async event => {
+      const button = event.target.closest('[data-remove-subscriber]');
+      if (!button) return;
+      const email = button.dataset.removeSubscriber || '';
+      button.disabled = true;
+      button.textContent = '移除中...';
+      try {
+        await removeSubscriber(email);
+      } catch (error) {
+        els.subscriberNote.textContent = error.message || '移除失败';
+        button.disabled = false;
+        button.textContent = '移除';
+      }
+    });
+
     els.papers.addEventListener('click', event => {
       const translateButton = event.target.closest('[data-translate-paper]');
       if (translateButton) {
@@ -1862,6 +2137,7 @@ INDEX_HTML = r"""
 
     (async function init() {
       await loadJournals();
+      await loadSubscribers();
       await loadPapers();
     })();
   </script>
@@ -1990,6 +2266,57 @@ class PaperTrackerHandler(BaseHTTPRequestHandler):
             return
         self.send_json({"translation": translation})
 
+    def handle_list_subscribers(self) -> None:
+        subscribers = list_subscribers(self.db_path)
+        self.send_json(
+            {
+                "subscribers": subscribers,
+                "email_notifications_enabled": email_notifications_enabled(
+                    self.db_path
+                ),
+                "smtp_configured": smtp_configured(),
+            }
+        )
+
+    def handle_add_subscriber(self) -> None:
+        payload = self.read_json_body()
+        email = str(payload.get("email") or "")
+        try:
+            subscriber = add_subscriber(email, self.db_path)
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, status=400)
+            return
+        self.send_json(
+            {
+                "subscriber": subscriber,
+                "subscribers": list_subscribers(self.db_path),
+                "email_notifications_enabled": email_notifications_enabled(
+                    self.db_path
+                ),
+                "smtp_configured": smtp_configured(),
+            },
+            status=201,
+        )
+
+    def handle_remove_subscriber(self) -> None:
+        payload = self.read_json_body()
+        email = str(payload.get("email") or "")
+        try:
+            remove_subscriber(email, self.db_path)
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, status=400)
+            return
+        self.send_json(
+            {
+                "ok": True,
+                "subscribers": list_subscribers(self.db_path),
+                "email_notifications_enabled": email_notifications_enabled(
+                    self.db_path
+                ),
+                "smtp_configured": smtp_configured(),
+            }
+        )
+
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         query = urllib.parse.parse_qs(parsed.query)
@@ -2010,6 +2337,9 @@ class PaperTrackerHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/journals":
             self.send_json(journal_counts(self.db_path))
+            return
+        if parsed.path == "/api/subscribers":
+            self.handle_list_subscribers()
             return
         if parsed.path == "/api/papers":
             query = urllib.parse.parse_qs(parsed.query)
@@ -2063,6 +2393,14 @@ class PaperTrackerHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"error": str(exc)}, status=500)
             return
+        if parsed.path == "/api/subscribers":
+            try:
+                self.handle_add_subscriber()
+            except json.JSONDecodeError:
+                self.send_json({"error": "Invalid JSON body"}, status=400)
+            except Exception as exc:
+                self.send_json({"error": str(exc)}, status=500)
+            return
         if parsed.path != "/api/fetch":
             self.send_error(404)
             return
@@ -2071,6 +2409,21 @@ class PaperTrackerHandler(BaseHTTPRequestHandler):
             return
         try:
             self.handle_fetch(query)
+        except Exception as exc:
+            self.send_json({"error": str(exc)}, status=500)
+
+    def do_DELETE(self) -> None:
+        parsed = urllib.parse.urlparse(self.path)
+        if not self.is_authorized():
+            self.send_auth_required()
+            return
+        if parsed.path != "/api/subscribers":
+            self.send_error(404)
+            return
+        try:
+            self.handle_remove_subscriber()
+        except json.JSONDecodeError:
+            self.send_json({"error": "Invalid JSON body"}, status=400)
         except Exception as exc:
             self.send_json({"error": str(exc)}, status=500)
 
