@@ -28,6 +28,7 @@ DEFAULT_JOURNALS = ROOT / "journals.csv"
 OPENALEX_URL = "https://api.openalex.org/works"
 HBR_FEED_URL = "http://feeds.harvardbusiness.org/harvardbusiness"
 DEEPL_FREE_API_URL = "https://api-free.deepl.com"
+MYMEMORY_TRANSLATE_URL = "https://api.mymemory.translated.net/get"
 TAG_RE = re.compile(r"<[^>]+>")
 AUTH_REALM = "Paper Tracker"
 
@@ -81,6 +82,27 @@ def configured_deepl_model_label() -> str:
     source = configured_deepl_source_lang() or "auto"
     target = configured_deepl_target_lang()
     return f"deepl:{source.lower()}-{target.lower()}"
+
+
+def configured_translation_provider() -> str:
+    provider = os.getenv("PAPER_TRACKER_TRANSLATION_PROVIDER", "auto").strip().lower()
+    if provider in {"auto", "deepl", "mymemory"}:
+        return provider
+    return "auto"
+
+
+def configured_mymemory_source_lang() -> str:
+    return os.getenv("MYMEMORY_SOURCE_LANG", "en").strip().lower()
+
+
+def configured_mymemory_target_lang() -> str:
+    return os.getenv("MYMEMORY_TARGET_LANG", "zh-CN").strip()
+
+
+def configured_mymemory_model_label() -> str:
+    source = configured_mymemory_source_lang()
+    target = configured_mymemory_target_lang()
+    return f"mymemory:{source}-{target.lower()}"
 
 
 def load_journals(path: Path = DEFAULT_JOURNALS) -> list[dict[str, str]]:
@@ -311,6 +333,110 @@ def request_deepl_translation(
             str(translations[1].get("text") or "").strip() if abstract else ""
         ),
     }
+
+
+def split_translation_chunks(text: str, max_chars: int = 450) -> list[str]:
+    text = " ".join((text or "").split())
+    if not text:
+        return []
+    chunks: list[str] = []
+    current = ""
+    parts = re.split(r"(?<=[.!?])\s+", text)
+    for part in parts:
+        if len(part) > max_chars:
+            if current:
+                chunks.append(current)
+                current = ""
+            for start in range(0, len(part), max_chars):
+                chunks.append(part[start : start + max_chars])
+            continue
+        next_value = f"{current} {part}".strip() if current else part
+        if len(next_value) > max_chars and current:
+            chunks.append(current)
+            current = part
+        else:
+            current = next_value
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def request_mymemory_text(text: str) -> str:
+    if not text:
+        return ""
+    params = {
+        "q": text,
+        "langpair": (
+            f"{configured_mymemory_source_lang()}|"
+            f"{configured_mymemory_target_lang()}"
+        ),
+    }
+    email = os.getenv("MYMEMORY_EMAIL", "").strip()
+    if email:
+        params["de"] = email
+    query = urllib.parse.urlencode(params)
+    request = urllib.request.Request(
+        f"{MYMEMORY_TRANSLATE_URL}?{query}",
+        headers={
+            "Accept": "application/json",
+            "User-Agent": os.getenv(
+                "PAPER_TRACKER_USER_AGENT", "paper-tracker/0.1"
+            ),
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=40) as response:
+            payload = json.load(response)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"MyMemory HTTP {exc.code}: {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"MyMemory request failed: {exc}") from exc
+    response_data = payload.get("responseData") or {}
+    translated = str(response_data.get("translatedText") or "").strip()
+    status = int(payload.get("responseStatus") or 0)
+    if status >= 400 or not translated:
+        message = payload.get("responseDetails") or "MyMemory did not return text"
+        raise RuntimeError(str(message))
+    return translated
+
+
+def request_mymemory_translation(
+    *,
+    title: str,
+    abstract: str,
+) -> dict[str, str]:
+    title_zh = request_mymemory_text(title)
+    abstract_chunks = split_translation_chunks(abstract)
+    abstract_zh = "\n".join(
+        request_mymemory_text(chunk) for chunk in abstract_chunks
+    )
+    return {"title_zh": title_zh, "abstract_zh": abstract_zh}
+
+
+def translation_backend() -> tuple[str, str]:
+    provider = configured_translation_provider()
+    has_deepl = bool(os.getenv("DEEPL_API_KEY", "").strip())
+    if provider == "deepl":
+        if not has_deepl:
+            raise TranslationConfigError("Translation requires DEEPL_API_KEY")
+        return "deepl", configured_deepl_model_label()
+    if provider == "mymemory":
+        return "mymemory", configured_mymemory_model_label()
+    if has_deepl:
+        return "deepl", configured_deepl_model_label()
+    return "mymemory", configured_mymemory_model_label()
+
+
+def request_translation(
+    *,
+    title: str,
+    abstract: str,
+    provider: str,
+) -> dict[str, str]:
+    if provider == "deepl":
+        return request_deepl_translation(title=title, abstract=abstract)
+    return request_mymemory_translation(title=title, abstract=abstract)
 
 
 def clean_html(value: str | None) -> str:
@@ -682,15 +808,16 @@ def translate_paper(
     title = paper.get("title") or ""
     abstract = paper.get("abstract") or ""
     source_hash = paper_source_hash(title, abstract)
-    model = configured_deepl_model_label()
+    provider, model = translation_backend()
     if not refresh:
         cached = cached_translation(db_path, paper_key, source_hash, model)
         if cached:
             cached["cached"] = True
             return cached
-    translated = request_deepl_translation(
+    translated = request_translation(
         title=title,
         abstract=abstract,
+        provider=provider,
     )
     return save_translation(
         db_path=db_path,
@@ -1522,10 +1649,10 @@ INDEX_HTML = r"""
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ paper_key: paperKey })
         });
-        const data = await res.json();
-        if (!res.ok) {
-          const message = data.needs_configuration ?
-            '需要先在部署环境配置 DEEPL_API_KEY，之后再点击翻译。' :
+          const data = await res.json();
+          if (!res.ok) {
+            const message = data.needs_configuration ?
+            '需要先在部署环境配置翻译服务变量，之后再点击翻译。' :
             (data.error || '翻译请求失败');
           throw new Error(message);
         }

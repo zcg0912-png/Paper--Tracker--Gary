@@ -57,15 +57,22 @@ export OPENALEX_API_KEY="your_key"
 export OPENALEX_MAILTO="you@example.com"
 ```
 
-Chinese title and abstract translation is optional and uses DeepL. The web page
-only requests a translation after someone clicks a paper's translation button.
-Translations are cached in SQLite so the same paper does not need to be
-translated again:
+Chinese title and abstract translation is optional. The web page only requests
+a translation after someone clicks a paper's translation button. Translations
+are cached in SQLite so the same paper does not need to be translated again.
+By default the app uses DeepL when `DEEPL_API_KEY` is configured; otherwise it
+falls back to MyMemory, which does not require a payment method but has a much
+smaller free daily quota and lower translation quality:
 
 ```bash
-export DEEPL_API_KEY="your_deepl_api_key"
-export DEEPL_TARGET_LANG="ZH"
-export DEEPL_SOURCE_LANG="EN"
+export PAPER_TRACKER_TRANSLATION_PROVIDER="auto"
+export MYMEMORY_SOURCE_LANG="en"
+export MYMEMORY_TARGET_LANG="zh-CN"
+export MYMEMORY_EMAIL="you@example.com"
+# Optional, for higher-quality DeepL translations:
+# export DEEPL_API_KEY="your_deepl_api_key"
+# export DEEPL_TARGET_LANG="ZH"
+# export DEEPL_SOURCE_LANG="EN"
 ```
 
 ## Environment variables
@@ -84,8 +91,15 @@ export DEEPL_SOURCE_LANG="EN"
 - `PORT`: platform-provided port. Railway sets this automatically.
 - `OPENALEX_API_KEY` or `OPENALEX_MAILTO`: optional OpenAlex polite-pool
   settings.
-- `DEEPL_API_KEY`: optional DeepL API key. Required only for the on-demand
-  Chinese translation button.
+- `PAPER_TRACKER_TRANSLATION_PROVIDER`: optional translation provider:
+  `auto`, `deepl`, or `mymemory`. Defaults to `auto`.
+- `MYMEMORY_SOURCE_LANG`: optional MyMemory source language. Defaults to `en`.
+- `MYMEMORY_TARGET_LANG`: optional MyMemory target language. Defaults to
+  `zh-CN`.
+- `MYMEMORY_EMAIL`: optional MyMemory contact email. Recommended for more
+  generous free usage limits.
+- `DEEPL_API_KEY`: optional DeepL API key. When configured, `auto` mode uses
+  DeepL for the on-demand Chinese translation button.
 - `DEEPL_TARGET_LANG`: optional DeepL target language. Defaults to `ZH`.
 - `DEEPL_SOURCE_LANG`: optional DeepL source language. Defaults to `EN`.
 - `DEEPL_API_URL`: optional DeepL API base URL. Defaults to the Free API URL
@@ -103,7 +117,8 @@ PAPER_TRACKER_USER=paper
 PAPER_TRACKER_PASSWORD=<choose-a-strong-password>
 PAPER_TRACKER_CRON_SECRET=<choose-a-second-strong-secret>
 OPENALEX_MAILTO=<your-email>
-DEEPL_API_KEY=<your-deepl-api-key>
+PAPER_TRACKER_TRANSLATION_PROVIDER=auto
+MYMEMORY_EMAIL=<your-email>
 ```
 
 4. Add a Railway volume mounted at:
