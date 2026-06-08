@@ -80,6 +80,9 @@ run sends one digest email if new papers were inserted. No email is sent when
 there are no new papers:
 
 ```bash
+export RESEND_API_KEY="re_your_resend_api_key"
+export RESEND_FROM="Paper Tracker <onboarding@resend.dev>"
+# or use SMTP where outbound SMTP is supported:
 export SMTP_HOST="smtp.example.com"
 export SMTP_PORT="465"
 export SMTP_USER="you@example.com"
@@ -88,9 +91,11 @@ export MAIL_FROM="you@example.com"
 export NOTIFY_EMAIL_TO="you@example.com"
 ```
 
-For many mailboxes, `SMTP_PASSWORD` is an app password or SMTP authorization
-code, not the account login password. Port `465` uses SSL by default. Port
-`587` uses STARTTLS by default.
+Railway Hobby/Free deployments may not be able to reach SMTP servers directly,
+so an HTTPS email API such as Resend is recommended there. For many mailboxes,
+`SMTP_PASSWORD` is an app password or SMTP authorization code, not the account
+login password. Port `465` uses SSL by default. Port `587` uses STARTTLS by
+default.
 
 Users can also subscribe from the web page's email reminder panel. Those
 addresses are stored in SQLite and are included with `NOTIFY_EMAIL_TO` when
@@ -137,8 +142,10 @@ message to the address in the input field and reports SMTP errors directly.
 - `DEEPL_SOURCE_LANG`: optional DeepL source language. Defaults to `EN`.
 - `DEEPL_API_URL`: optional DeepL API base URL. Defaults to the Free API URL
   for Free keys and the Pro URL for Pro keys.
+- `RESEND_API_KEY`, `RESEND_FROM`: optional Resend HTTPS email API settings.
+  When configured, Resend is used before SMTP.
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`: optional SMTP
-  settings for digest emails when new papers are inserted.
+  fallback settings for digest emails when new papers are inserted.
 - `SMTP_SSL`: optional boolean. Defaults to true when `SMTP_PORT=465`.
 - `SMTP_STARTTLS`: optional boolean. Defaults to true when SSL is disabled.
 - `SMTP_TIMEOUT`: optional SMTP connection timeout in seconds. Defaults to `8`.
@@ -164,6 +171,8 @@ PAPER_TRACKER_CRON_SECRET=<choose-a-second-strong-secret>
 OPENALEX_MAILTO=<your-email>
 PAPER_TRACKER_TRANSLATION_PROVIDER=auto
 MYMEMORY_EMAIL=<your-email>
+RESEND_API_KEY=<your-resend-api-key>
+RESEND_FROM=Paper Tracker <onboarding@resend.dev>
 SMTP_HOST=<your-smtp-host>
 SMTP_PORT=465
 SMTP_USER=<your-email>

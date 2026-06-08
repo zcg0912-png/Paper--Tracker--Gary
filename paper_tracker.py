@@ -32,6 +32,7 @@ OPENALEX_URL = "https://api.openalex.org/works"
 HBR_FEED_URL = "http://feeds.harvardbusiness.org/harvardbusiness"
 DEEPL_FREE_API_URL = "https://api-free.deepl.com"
 MYMEMORY_TRANSLATE_URL = "https://api.mymemory.translated.net/get"
+RESEND_EMAILS_URL = "https://api.resend.com/emails"
 TAG_RE = re.compile(r"<[^>]+>")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 AUTH_REALM = "Paper Tracker"
@@ -146,8 +147,24 @@ def smtp_configured() -> bool:
     )
 
 
+def resend_configured() -> bool:
+    return bool(os.getenv("RESEND_API_KEY", "").strip())
+
+
+def email_delivery_configured() -> bool:
+    return resend_configured() or smtp_configured()
+
+
+def configured_email_provider() -> str:
+    if resend_configured():
+        return "resend"
+    if smtp_configured():
+        return "smtp"
+    return ""
+
+
 def email_notifications_enabled(db_path: Path | None = None) -> bool:
-    if not smtp_configured():
+    if not email_delivery_configured():
         return False
     if configured_email_recipients():
         return True
@@ -782,7 +799,42 @@ def notification_recipients(db_path: Path) -> list[str]:
     return recipients
 
 
+def send_resend_email(subject: str, body: str, recipients: list[str]) -> None:
+    api_key = os.getenv("RESEND_API_KEY", "").strip()
+    sender = os.getenv("RESEND_FROM", "").strip() or os.getenv("MAIL_FROM", "").strip()
+    if not api_key or not sender or not recipients:
+        raise RuntimeError("Resend email settings are incomplete")
+    payload = {
+        "from": sender,
+        "to": recipients,
+        "subject": subject,
+        "text": body,
+    }
+    request = urllib.request.Request(
+        os.getenv("RESEND_EMAILS_URL", RESEND_EMAILS_URL).strip(),
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": os.getenv("PAPER_TRACKER_USER_AGENT", "paper-tracker/0.1"),
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            json.load(response)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Resend HTTP {exc.code}: {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Resend request failed: {exc}") from exc
+
+
 def send_email(subject: str, body: str, recipients: list[str]) -> None:
+    if resend_configured():
+        send_resend_email(subject, body, recipients)
+        return
     host = os.getenv("SMTP_HOST", "").strip()
     user = os.getenv("SMTP_USER", "").strip()
     password = os.getenv("SMTP_PASSWORD", "").strip()
@@ -841,7 +893,7 @@ def build_test_email() -> tuple[str, str]:
 
 
 def send_subscription_confirmation(email: str) -> bool:
-    if not smtp_configured():
+    if not email_delivery_configured():
         return False
     subject, body = build_subscription_confirmation()
     send_email(subject, body, [email])
@@ -852,8 +904,8 @@ def send_test_email(email: str) -> None:
     normalized = normalize_email(email)
     if not is_valid_email(normalized):
         raise ValueError("请输入有效的邮箱地址")
-    if not smtp_configured():
-        raise RuntimeError("SMTP settings are incomplete")
+    if not email_delivery_configured():
+        raise RuntimeError("Email delivery settings are incomplete")
     subject, body = build_test_email()
     send_email(subject, body, [normalized])
 
@@ -867,7 +919,7 @@ def mask_email(email: str) -> str:
 
 
 def send_subscription_confirmation_async(email: str) -> bool:
-    if not smtp_configured():
+    if not email_delivery_configured():
         return False
 
     def worker() -> None:
@@ -894,12 +946,12 @@ def notify_new_papers(papers: list[dict[str, str]], db_path: Path) -> dict:
     recipients = notification_recipients(db_path)
     if not papers:
         return {
-            "enabled": smtp_configured() and bool(recipients),
+            "enabled": email_delivery_configured() and bool(recipients),
             "sent": False,
             "count": 0,
             "recipients": len(recipients),
         }
-    if not smtp_configured() or not recipients:
+    if not email_delivery_configured() or not recipients:
         return {"enabled": False, "sent": False, "count": len(papers)}
     subject, body = build_email_digest(papers)
     try:
@@ -1965,10 +2017,10 @@ INDEX_HTML = r"""
     }
 
     function renderSubscribers(data = {}) {
-      const smtpConfigured = Boolean(data.smtp_configured);
+      const emailConfigured = Boolean(data.email_delivery_configured || data.smtp_configured);
       const count = Number(data.subscriber_count || 0);
-      if (!smtpConfigured) {
-        els.subscriberNote.textContent = '邮箱会保存；配置 SMTP 后开始发送提醒';
+      if (!emailConfigured) {
+        els.subscriberNote.textContent = '邮箱会保存；配置邮件服务后开始发送提醒';
       } else if (count) {
         els.subscriberNote.textContent = `后台已记录 ${formatNumber(count)} 个订阅邮箱`;
       } else {
@@ -2185,7 +2237,7 @@ INDEX_HTML = r"""
         } else if (data.confirmation_error) {
           els.subscriberNote.textContent = `已保存邮箱，但确认邮件发送失败：${data.confirmation_error}`;
         } else {
-          els.subscriberNote.textContent = '已保存邮箱；配置 SMTP 后开始发送提醒';
+          els.subscriberNote.textContent = '已保存邮箱；配置邮件服务后开始发送提醒';
         }
         button.textContent = '已保存';
         setTimeout(() => { button.textContent = '订阅提醒'; }, 1200);
@@ -2395,6 +2447,14 @@ class PaperTrackerHandler(BaseHTTPRequestHandler):
             return
         self.send_json({"translation": translation})
 
+    def email_status_payload(self) -> dict:
+        return {
+            "email_delivery_configured": email_delivery_configured(),
+            "email_provider": configured_email_provider(),
+            "smtp_configured": smtp_configured(),
+            "resend_configured": resend_configured(),
+        }
+
     def handle_list_subscribers(self) -> None:
         self.send_json(
             {
@@ -2402,7 +2462,7 @@ class PaperTrackerHandler(BaseHTTPRequestHandler):
                 "email_notifications_enabled": email_notifications_enabled(
                     self.db_path
                 ),
-                "smtp_configured": smtp_configured(),
+                **self.email_status_payload(),
             }
         )
 
@@ -2428,7 +2488,7 @@ class PaperTrackerHandler(BaseHTTPRequestHandler):
                 "email_notifications_enabled": email_notifications_enabled(
                     self.db_path
                 ),
-                "smtp_configured": smtp_configured(),
+                **self.email_status_payload(),
                 "confirmation_queued": confirmation_queued,
                 "confirmation_sent": False,
                 "confirmation_error": confirmation_error,
@@ -2451,7 +2511,7 @@ class PaperTrackerHandler(BaseHTTPRequestHandler):
                 "email_notifications_enabled": email_notifications_enabled(
                     self.db_path
                 ),
-                "smtp_configured": smtp_configured(),
+                **self.email_status_payload(),
             }
         )
 
@@ -2465,7 +2525,7 @@ class PaperTrackerHandler(BaseHTTPRequestHandler):
                 "email_notifications_enabled": email_notifications_enabled(
                     self.db_path
                 ),
-                "smtp_configured": smtp_configured(),
+                **self.email_status_payload(),
             }
         )
 
@@ -2481,12 +2541,12 @@ class PaperTrackerHandler(BaseHTTPRequestHandler):
             self.send_json(
                 {
                     "error": str(exc),
-                    "smtp_configured": smtp_configured(),
+                    **self.email_status_payload(),
                 },
                 status=503,
             )
             return
-        self.send_json({"sent": True, "smtp_configured": smtp_configured()})
+        self.send_json({"sent": True, **self.email_status_payload()})
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
