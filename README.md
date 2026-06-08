@@ -37,6 +37,7 @@ triggered by the protected Cron endpoint.
 - publication date
 - DOI
 - article link
+- optional Chinese title and abstract translations, generated on demand
 
 The article link is usually the publisher landing page or a DOI URL. The app
 does not fetch or store PDFs.
@@ -56,6 +57,15 @@ export OPENALEX_API_KEY="your_key"
 export OPENALEX_MAILTO="you@example.com"
 ```
 
+Chinese title and abstract translation is optional. The web page only requests
+a translation after someone clicks a paper's translation button. Translations
+are cached in SQLite so the same paper does not need to be translated again:
+
+```bash
+export OPENAI_API_KEY="your_openai_api_key"
+export PAPER_TRACKER_TRANSLATE_MODEL="gpt-4o-mini"
+```
+
 ## Environment variables
 
 - `PAPER_TRACKER_DB`: SQLite database path. Use `/data/papers.db` on Railway
@@ -72,6 +82,10 @@ export OPENALEX_MAILTO="you@example.com"
 - `PORT`: platform-provided port. Railway sets this automatically.
 - `OPENALEX_API_KEY` or `OPENALEX_MAILTO`: optional OpenAlex polite-pool
   settings.
+- `OPENAI_API_KEY`: optional OpenAI API key. Required only for the on-demand
+  Chinese translation button.
+- `PAPER_TRACKER_TRANSLATE_MODEL`: optional translation model. Defaults to
+  `gpt-4o-mini`.
 
 ## Railway deployment
 
@@ -85,6 +99,7 @@ PAPER_TRACKER_USER=paper
 PAPER_TRACKER_PASSWORD=<choose-a-strong-password>
 PAPER_TRACKER_CRON_SECRET=<choose-a-second-strong-secret>
 OPENALEX_MAILTO=<your-email>
+OPENAI_API_KEY=<your-openai-api-key>
 ```
 
 4. Add a Railway volume mounted at:

@@ -5,6 +5,7 @@ import argparse
 import base64
 import csv
 import datetime as dt
+import hashlib
 import hmac
 import html as html_lib
 import json
@@ -26,8 +27,17 @@ DEFAULT_DB = ROOT / "papers.db"
 DEFAULT_JOURNALS = ROOT / "journals.csv"
 OPENALEX_URL = "https://api.openalex.org/works"
 HBR_FEED_URL = "http://feeds.harvardbusiness.org/harvardbusiness"
+OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 TAG_RE = re.compile(r"<[^>]+>")
 AUTH_REALM = "Paper Tracker"
+
+
+class TranslationConfigError(RuntimeError):
+    pass
+
+
+class PaperNotFoundError(RuntimeError):
+    pass
 
 
 def utc_now() -> str:
@@ -48,6 +58,10 @@ def configured_port(default: int = 8765) -> int:
     if not value:
         return default
     return int(value)
+
+
+def configured_translate_model() -> str:
+    return os.getenv("PAPER_TRACKER_TRANSLATE_MODEL", "gpt-4o-mini")
 
 
 def load_journals(path: Path = DEFAULT_JOURNALS) -> list[dict[str, str]]:
@@ -95,6 +109,26 @@ def init_db(db_path: Path = DEFAULT_DB) -> None:
             "CREATE INDEX IF NOT EXISTS idx_papers_date ON papers(publication_date)"
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_papers_doi ON papers(doi)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS paper_translations (
+                paper_key TEXT PRIMARY KEY,
+                source_hash TEXT NOT NULL,
+                title_zh TEXT NOT NULL,
+                abstract_zh TEXT,
+                model TEXT NOT NULL,
+                translated_at TEXT NOT NULL,
+                FOREIGN KEY (paper_key) REFERENCES papers(paper_key)
+                    ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_paper_translations_hash
+            ON paper_translations(source_hash)
+            """
+        )
 
 
 def normalize_doi(doi: str | None) -> str:
@@ -205,6 +239,103 @@ def request_remote_fetch(base_url: str, secret: str) -> dict:
         raise RuntimeError(f"Remote fetch HTTP {exc.code}: {detail}") from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"Remote fetch request failed: {exc}") from exc
+
+
+def request_openai_translation(
+    *,
+    title: str,
+    abstract: str,
+    model: str,
+) -> dict[str, str]:
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        raise TranslationConfigError("Translation requires OPENAI_API_KEY")
+    source = {"title": title, "abstract": abstract}
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "title_zh": {
+                "type": "string",
+                "description": "A concise Simplified Chinese translation of the title.",
+            },
+            "abstract_zh": {
+                "type": "string",
+                "description": "A faithful Simplified Chinese translation of the abstract.",
+            },
+        },
+        "required": ["title_zh", "abstract_zh"],
+    }
+    body = {
+        "model": model,
+        "instructions": (
+            "你是严谨的学术论文翻译助手。请把论文标题和摘要翻译为简体中文，"
+            "保留学术术语、机构名、人名和变量含义，不要加入解释、评价或 Markdown。"
+            "如果摘要为空，abstract_zh 返回空字符串。"
+        ),
+        "input": json.dumps(source, ensure_ascii=False),
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "paper_translation",
+                "schema": schema,
+                "strict": True,
+            }
+        },
+        "max_output_tokens": 1800,
+        "store": False,
+    }
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "User-Agent": os.getenv("PAPER_TRACKER_USER_AGENT", "paper-tracker/0.1"),
+    }
+    project = os.getenv("OPENAI_PROJECT", "").strip()
+    if project:
+        headers["OpenAI-Project"] = project
+    request = urllib.request.Request(
+        OPENAI_RESPONSES_URL,
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=80) as response:
+            payload = json.load(response)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"OpenAI HTTP {exc.code}: {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"OpenAI request failed: {exc}") from exc
+    text = extract_openai_text(payload)
+    try:
+        translated = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("OpenAI returned an invalid translation payload") from exc
+    return {
+        "title_zh": str(translated.get("title_zh") or "").strip(),
+        "abstract_zh": str(translated.get("abstract_zh") or "").strip(),
+    }
+
+
+def extract_openai_text(payload: dict) -> str:
+    direct = payload.get("output_text")
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()
+    parts: list[str] = []
+    for item in payload.get("output") or []:
+        for content in item.get("content") or []:
+            if content.get("type") in {"output_text", "text"}:
+                text = content.get("text")
+                if text:
+                    parts.append(text)
+    text = "".join(parts).strip()
+    if not text:
+        error = payload.get("error") or {}
+        message = error.get("message") if isinstance(error, dict) else ""
+        raise RuntimeError(message or "OpenAI did not return translation text")
+    return text
 
 
 def clean_html(value: str | None) -> str:
@@ -486,6 +617,114 @@ def query_papers(
     params.append(limit)
     with sqlite3.connect(db_path) as conn:
         return rows_to_dicts(conn.execute(sql, params))
+
+
+def paper_source_hash(title: str, abstract: str) -> str:
+    source = f"{title}\n\n{abstract}".encode("utf-8")
+    return hashlib.sha256(source).hexdigest()
+
+
+def get_paper(db_path: Path, paper_key: str) -> dict | None:
+    init_db(db_path)
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT paper_key, title, abstract, journal, publication_date
+            FROM papers
+            WHERE paper_key = ?
+            """,
+            (paper_key,),
+        )
+        rows = rows_to_dicts(row)
+    return rows[0] if rows else None
+
+
+def cached_translation(
+    db_path: Path,
+    paper_key: str,
+    source_hash: str,
+) -> dict | None:
+    init_db(db_path)
+    with sqlite3.connect(db_path) as conn:
+        rows = rows_to_dicts(
+            conn.execute(
+                """
+                SELECT paper_key, title_zh, abstract_zh, model, translated_at
+                FROM paper_translations
+                WHERE paper_key = ? AND source_hash = ?
+                """,
+                (paper_key, source_hash),
+            )
+        )
+    return rows[0] if rows else None
+
+
+def save_translation(
+    *,
+    db_path: Path,
+    paper_key: str,
+    source_hash: str,
+    title_zh: str,
+    abstract_zh: str,
+    model: str,
+) -> dict:
+    translated_at = utc_now()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO paper_translations (
+                paper_key, source_hash, title_zh, abstract_zh, model, translated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(paper_key) DO UPDATE SET
+                source_hash = excluded.source_hash,
+                title_zh = excluded.title_zh,
+                abstract_zh = excluded.abstract_zh,
+                model = excluded.model,
+                translated_at = excluded.translated_at
+            """,
+            (paper_key, source_hash, title_zh, abstract_zh, model, translated_at),
+        )
+    return {
+        "paper_key": paper_key,
+        "title_zh": title_zh,
+        "abstract_zh": abstract_zh,
+        "model": model,
+        "translated_at": translated_at,
+        "cached": False,
+    }
+
+
+def translate_paper(
+    *,
+    db_path: Path,
+    paper_key: str,
+    refresh: bool = False,
+) -> dict:
+    paper = get_paper(db_path, paper_key)
+    if not paper:
+        raise PaperNotFoundError("Paper not found")
+    title = paper.get("title") or ""
+    abstract = paper.get("abstract") or ""
+    source_hash = paper_source_hash(title, abstract)
+    if not refresh:
+        cached = cached_translation(db_path, paper_key, source_hash)
+        if cached:
+            cached["cached"] = True
+            return cached
+    model = configured_translate_model()
+    translated = request_openai_translation(
+        title=title,
+        abstract=abstract,
+        model=model,
+    )
+    return save_translation(
+        db_path=db_path,
+        paper_key=paper_key,
+        source_hash=source_hash,
+        title_zh=translated["title_zh"],
+        abstract_zh=translated["abstract_zh"],
+        model=model,
+    )
 
 
 def count_papers(
@@ -889,6 +1128,11 @@ INDEX_HTML = r"""
     .text-button:hover {
       text-decoration: underline;
     }
+    .text-button:disabled {
+      cursor: wait;
+      opacity: 0.62;
+      text-decoration: none;
+    }
     .paper-actions {
       align-items: center;
       display: flex;
@@ -912,6 +1156,37 @@ INDEX_HTML = r"""
     .muted-note {
       color: var(--muted);
       font-size: 13px;
+    }
+    .translation-card {
+      background: #f8fafc;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      display: grid;
+      gap: 8px;
+      margin-top: 4px;
+      max-width: 72ch;
+      padding: 12px 14px;
+    }
+    .translation-label {
+      color: var(--accent-dark);
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .translation-title {
+      color: var(--text);
+      font-size: 16px;
+      font-weight: 800;
+      line-height: 1.45;
+      margin: 0;
+      overflow-wrap: anywhere;
+    }
+    .translation-abstract {
+      color: #2f3f55;
+      margin: 0;
+      overflow-wrap: anywhere;
+    }
+    .translation-error {
+      color: #9f1239;
     }
     .empty {
       background: var(--panel);
@@ -1059,7 +1334,7 @@ INDEX_HTML = r"""
     </div>
   </main>
   <script>
-    const state = { journals: [], selectedJournal: '' };
+    const state = { journals: [], selectedJournal: '', translations: new Map() };
     const els = {
       query: document.getElementById('query'),
       journal: document.getElementById('journal'),
@@ -1219,11 +1494,77 @@ INDEX_HTML = r"""
           <div class="paper-body">
             ${abstract}
             <div class="paper-actions">
+              <button class="text-button" type="button" data-translate-paper data-paper-key="${escapeHtml(paper.paper_key)}">翻译</button>
               <a class="text-link" href="${url}" target="_blank" rel="noopener noreferrer">打开原文</a>
             </div>
+            <div class="translation-card is-hidden" data-translation-panel></div>
           </div>
         </article>
       `;
+    }
+
+    function renderTranslation(translation) {
+      const title = escapeHtml(translation.title_zh || '暂无标题翻译');
+      const abstract = translation.abstract_zh ?
+        `<p class="translation-abstract">${escapeHtml(translation.abstract_zh)}</p>` :
+        '<div class="muted-note">暂无摘要翻译。</div>';
+      const source = translation.cached ? '缓存翻译' : '新翻译';
+      const meta = translation.translated_at ?
+        `<div class="muted-note">${source} / ${escapeHtml(translation.model || '')} / ${escapeHtml(translation.translated_at)}</div>` :
+        '';
+      return `
+        <div class="translation-label">中文翻译</div>
+        <h3 class="translation-title">${title}</h3>
+        ${abstract}
+        ${meta}
+      `;
+    }
+
+    function renderTranslationError(message) {
+      return `
+        <div class="translation-label translation-error">翻译失败</div>
+        <div class="muted-note translation-error">${escapeHtml(message)}</div>
+      `;
+    }
+
+    async function handleTranslate(button) {
+      const article = button.closest('.paper');
+      const panel = article.querySelector('[data-translation-panel]');
+      const paperKey = button.dataset.paperKey || '';
+      if (panel.dataset.loaded === 'true') {
+        const shouldHide = !panel.classList.contains('is-hidden');
+        panel.classList.toggle('is-hidden', shouldHide);
+        button.textContent = shouldHide ? '显示翻译' : '收起翻译';
+        return;
+      }
+      button.disabled = true;
+      button.textContent = '翻译中...';
+      panel.classList.remove('is-hidden');
+      panel.innerHTML = '<div class="muted-note">正在生成中文翻译...</div>';
+      try {
+        const res = await fetch('/api/translate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ paper_key: paperKey })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          const message = data.needs_configuration ?
+            '需要先在部署环境配置 OPENAI_API_KEY，之后再点击翻译。' :
+            (data.error || '翻译请求失败');
+          throw new Error(message);
+        }
+        const translation = data.translation || {};
+        state.translations.set(paperKey, translation);
+        panel.dataset.loaded = 'true';
+        panel.innerHTML = renderTranslation(translation);
+        button.textContent = '收起翻译';
+      } catch (error) {
+        panel.innerHTML = renderTranslationError(error.message || '翻译请求失败');
+        button.textContent = '重试翻译';
+      } finally {
+        button.disabled = false;
+      }
     }
 
     els.journalList.addEventListener('click', event => {
@@ -1236,6 +1577,11 @@ INDEX_HTML = r"""
     });
 
     els.papers.addEventListener('click', event => {
+      const translateButton = event.target.closest('[data-translate-paper]');
+      if (translateButton) {
+        handleTranslate(translateButton);
+        return;
+      }
       const button = event.target.closest('[data-toggle-abstract]');
       if (!button) return;
       const block = button.closest('.abstract-block');
@@ -1283,6 +1629,15 @@ class PaperTrackerHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def read_json_body(self) -> dict:
+        length = int(self.headers.get("Content-Length") or "0")
+        if length <= 0:
+            return {}
+        if length > 8192:
+            raise ValueError("Request body is too large")
+        raw = self.rfile.read(length)
+        return json.loads(raw.decode("utf-8"))
 
     def send_auth_required(self) -> None:
         body = b"Authentication required"
@@ -1354,6 +1709,33 @@ class PaperTrackerHandler(BaseHTTPRequestHandler):
             return
         self.handle_fetch(query)
 
+    def handle_translate(self) -> None:
+        payload = self.read_json_body()
+        paper_key = str(payload.get("paper_key") or "").strip()
+        refresh = bool(payload.get("refresh"))
+        if not paper_key:
+            self.send_json({"error": "paper_key is required"}, status=400)
+            return
+        try:
+            translation = translate_paper(
+                db_path=self.db_path,
+                paper_key=paper_key,
+                refresh=refresh,
+            )
+        except PaperNotFoundError as exc:
+            self.send_json({"error": str(exc)}, status=404)
+            return
+        except TranslationConfigError as exc:
+            self.send_json(
+                {
+                    "error": str(exc),
+                    "needs_configuration": True,
+                },
+                status=503,
+            )
+            return
+        self.send_json({"translation": translation})
+
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         query = urllib.parse.parse_qs(parsed.query)
@@ -1418,6 +1800,14 @@ class PaperTrackerHandler(BaseHTTPRequestHandler):
             return
         if not self.is_authorized():
             self.send_auth_required()
+            return
+        if parsed.path == "/api/translate":
+            try:
+                self.handle_translate()
+            except json.JSONDecodeError:
+                self.send_json({"error": "Invalid JSON body"}, status=400)
+            except Exception as exc:
+                self.send_json({"error": str(exc)}, status=500)
             return
         if parsed.path != "/api/fetch":
             self.send_error(404)
