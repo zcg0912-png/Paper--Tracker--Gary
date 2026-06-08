@@ -94,9 +94,10 @@ code, not the account login password. Port `465` uses SSL by default. Port
 
 Users can also subscribe from the web page's email reminder panel. Those
 addresses are stored in SQLite and are included with `NOTIFY_EMAIL_TO` when
-new-paper digest emails are sent. If the public site is not protected with
-`PAPER_TRACKER_PASSWORD`, anyone who can open the site can add or remove
-subscriber emails.
+new-paper digest emails are sent. The web page only shows subscription counts,
+not the actual email addresses. If the public site is not protected with
+`PAPER_TRACKER_PASSWORD`, anyone who can open the site can add subscriber
+emails.
 
 ## Environment variables
 

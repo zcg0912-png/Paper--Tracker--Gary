@@ -1327,37 +1327,6 @@ INDEX_HTML = r"""
       display: grid;
       gap: 8px;
     }
-    .subscriber-list {
-      display: grid;
-      gap: 6px;
-    }
-    .subscriber-row {
-      align-items: center;
-      background: var(--panel-soft);
-      border-radius: 7px;
-      color: #3d4b60;
-      display: grid;
-      gap: 8px;
-      grid-template-columns: minmax(0, 1fr) auto;
-      min-height: 34px;
-      padding: 7px 9px;
-    }
-    .subscriber-email {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .subscriber-remove {
-      background: transparent;
-      border: 0;
-      color: #9f1239;
-      cursor: pointer;
-      font-size: 13px;
-      font-weight: 750;
-      min-height: 24px;
-      padding: 0;
-      width: auto;
-    }
     .journal-button {
       align-items: center;
       background: transparent;
@@ -1751,7 +1720,6 @@ INDEX_HTML = r"""
               </label>
               <button type="submit">订阅提醒</button>
             </form>
-            <div class="subscriber-list" id="subscriber-list"></div>
           </section>
           <nav class="panel journal-panel" id="journal-list"></nav>
         </aside>
@@ -1772,7 +1740,6 @@ INDEX_HTML = r"""
     const state = {
       journals: [],
       selectedJournal: '',
-      subscribers: [],
       translations: new Map()
     };
     const els = {
@@ -1790,7 +1757,6 @@ INDEX_HTML = r"""
       statVisible: document.getElementById('stat-visible'),
       subscriberForm: document.getElementById('subscriber-form'),
       subscriberEmail: document.getElementById('subscriber-email'),
-      subscriberList: document.getElementById('subscriber-list'),
       subscriberNote: document.getElementById('subscriber-note')
     };
 
@@ -1878,7 +1844,6 @@ INDEX_HTML = r"""
       try {
         const res = await fetch('/api/subscribers');
         const data = await readJsonResponse(res, '加载订阅列表失败');
-        state.subscribers = data.subscribers || [];
         renderSubscribers(data);
       } catch (error) {
         els.subscriberNote.textContent = error.message || '加载订阅列表失败';
@@ -1887,21 +1852,14 @@ INDEX_HTML = r"""
 
     function renderSubscribers(data = {}) {
       const smtpConfigured = Boolean(data.smtp_configured);
+      const count = Number(data.subscriber_count || 0);
       if (!smtpConfigured) {
         els.subscriberNote.textContent = '邮箱会保存；配置 SMTP 后开始发送提醒';
-      } else if (state.subscribers.length) {
-        els.subscriberNote.textContent = `已订阅 ${formatNumber(state.subscribers.length)} 个邮箱`;
+      } else if (count) {
+        els.subscriberNote.textContent = `后台已记录 ${formatNumber(count)} 个订阅邮箱`;
       } else {
         els.subscriberNote.textContent = '新增论文时发送汇总邮件';
       }
-      els.subscriberList.innerHTML = state.subscribers.length ?
-        state.subscribers.map(subscriber => `
-          <div class="subscriber-row">
-            <span class="subscriber-email">${escapeHtml(subscriber.email)}</span>
-            <button class="subscriber-remove" type="button" data-remove-subscriber="${escapeHtml(subscriber.email)}">移除</button>
-          </div>
-        `).join('') :
-        '<div class="muted-note">还没有前端订阅邮箱。</div>';
     }
 
     async function addSubscriber(email) {
@@ -1911,18 +1869,6 @@ INDEX_HTML = r"""
         body: JSON.stringify({ email })
       });
       const data = await readJsonResponse(res, '订阅失败');
-      state.subscribers = data.subscribers || [];
-      renderSubscribers(data);
-    }
-
-    async function removeSubscriber(email) {
-      const res = await fetch('/api/subscribers', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email })
-      });
-      const data = await readJsonResponse(res, '移除失败');
-      state.subscribers = data.subscribers || [];
       renderSubscribers(data);
     }
 
@@ -2108,21 +2054,6 @@ INDEX_HTML = r"""
       }
     });
 
-    els.subscriberList.addEventListener('click', async event => {
-      const button = event.target.closest('[data-remove-subscriber]');
-      if (!button) return;
-      const email = button.dataset.removeSubscriber || '';
-      button.disabled = true;
-      button.textContent = '移除中...';
-      try {
-        await removeSubscriber(email);
-      } catch (error) {
-        els.subscriberNote.textContent = error.message || '移除失败';
-        button.disabled = false;
-        button.textContent = '移除';
-      }
-    });
-
     els.papers.addEventListener('click', event => {
       const translateButton = event.target.closest('[data-translate-paper]');
       if (translateButton) {
@@ -2285,10 +2216,9 @@ class PaperTrackerHandler(BaseHTTPRequestHandler):
         self.send_json({"translation": translation})
 
     def handle_list_subscribers(self) -> None:
-        subscribers = list_subscribers(self.db_path)
         self.send_json(
             {
-                "subscribers": subscribers,
+                "subscriber_count": len(list_subscribers(self.db_path)),
                 "email_notifications_enabled": email_notifications_enabled(
                     self.db_path
                 ),
@@ -2300,14 +2230,13 @@ class PaperTrackerHandler(BaseHTTPRequestHandler):
         payload = self.read_json_body()
         email = str(payload.get("email") or "")
         try:
-            subscriber = add_subscriber(email, self.db_path)
+            add_subscriber(email, self.db_path)
         except ValueError as exc:
             self.send_json({"error": str(exc)}, status=400)
             return
         self.send_json(
             {
-                "subscriber": subscriber,
-                "subscribers": list_subscribers(self.db_path),
+                "subscriber_count": len(list_subscribers(self.db_path)),
                 "email_notifications_enabled": email_notifications_enabled(
                     self.db_path
                 ),
@@ -2327,7 +2256,7 @@ class PaperTrackerHandler(BaseHTTPRequestHandler):
         self.send_json(
             {
                 "ok": True,
-                "subscribers": list_subscribers(self.db_path),
+                "subscriber_count": len(list_subscribers(self.db_path)),
                 "email_notifications_enabled": email_notifications_enabled(
                     self.db_path
                 ),
