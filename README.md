@@ -105,6 +105,8 @@ after a user subscribes from the web page. This confirmation is sent in the
 background so slow SMTP connections do not block the subscription request. If
 SMTP is not configured, the address is still saved, but no confirmation email
 is sent.
+The email reminder panel also includes a test-email button that sends one
+message to the address in the input field and reports SMTP errors directly.
 
 ## Environment variables
 

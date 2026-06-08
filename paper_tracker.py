@@ -825,12 +825,37 @@ def build_subscription_confirmation() -> tuple[str, str]:
     return subject, body + "\n"
 
 
+def build_test_email() -> tuple[str, str]:
+    prefix = os.getenv("NOTIFY_EMAIL_SUBJECT_PREFIX", "论文追索").strip() or "论文追索"
+    subject = f"{prefix}: 测试邮件"
+    body = "\n".join(
+        [
+            "这是一封论文追索的 SMTP 测试邮件。",
+            "",
+            "如果你收到这封邮件，说明发件邮箱 SMTP 配置可以正常工作。",
+            "",
+            "这封邮件由论文追索自动发送。",
+        ]
+    )
+    return subject, body + "\n"
+
+
 def send_subscription_confirmation(email: str) -> bool:
     if not smtp_configured():
         return False
     subject, body = build_subscription_confirmation()
     send_email(subject, body, [email])
     return True
+
+
+def send_test_email(email: str) -> None:
+    normalized = normalize_email(email)
+    if not is_valid_email(normalized):
+        raise ValueError("请输入有效的邮箱地址")
+    if not smtp_configured():
+        raise RuntimeError("SMTP settings are incomplete")
+    subject, body = build_test_email()
+    send_email(subject, body, [normalized])
 
 
 def mask_email(email: str) -> str:
@@ -1805,6 +1830,7 @@ INDEX_HTML = r"""
               </label>
               <button type="submit">订阅提醒</button>
             </form>
+            <button class="text-button" type="button" id="subscriber-test">发送测试邮件</button>
             <button class="text-button" type="button" id="subscriber-clear">清空订阅邮箱</button>
           </section>
           <nav class="panel journal-panel" id="journal-list"></nav>
@@ -1843,6 +1869,7 @@ INDEX_HTML = r"""
       statVisible: document.getElementById('stat-visible'),
       subscriberForm: document.getElementById('subscriber-form'),
       subscriberEmail: document.getElementById('subscriber-email'),
+      subscriberTest: document.getElementById('subscriber-test'),
       subscriberClear: document.getElementById('subscriber-clear'),
       subscriberNote: document.getElementById('subscriber-note')
     };
@@ -1968,6 +1995,15 @@ INDEX_HTML = r"""
       const data = await readJsonResponse(res, '清空订阅失败');
       renderSubscribers(data);
       return data;
+    }
+
+    async function sendTestEmail(email) {
+      const res = await fetch('/api/notifications/test-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      });
+      return readJsonResponse(res, '发送测试邮件失败');
     }
 
     function renderJournalStats() {
@@ -2176,6 +2212,25 @@ INDEX_HTML = r"""
       } finally {
         els.subscriberClear.disabled = false;
         els.subscriberClear.textContent = '清空订阅邮箱';
+      }
+    });
+
+    els.subscriberTest.addEventListener('click', async () => {
+      const email = els.subscriberEmail.value.trim();
+      if (!email) {
+        els.subscriberNote.textContent = '请先在输入框里填一个测试收件邮箱';
+        return;
+      }
+      els.subscriberTest.disabled = true;
+      els.subscriberTest.textContent = '发送中...';
+      try {
+        await sendTestEmail(email);
+        els.subscriberNote.textContent = '测试邮件已发送，请检查收件箱和垃圾箱';
+      } catch (error) {
+        els.subscriberNote.textContent = error.message || '发送测试邮件失败';
+      } finally {
+        els.subscriberTest.disabled = false;
+        els.subscriberTest.textContent = '发送测试邮件';
       }
     });
 
@@ -2414,6 +2469,25 @@ class PaperTrackerHandler(BaseHTTPRequestHandler):
             }
         )
 
+    def handle_test_email(self) -> None:
+        payload = self.read_json_body()
+        email = str(payload.get("email") or "")
+        try:
+            send_test_email(email)
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, status=400)
+            return
+        except Exception as exc:
+            self.send_json(
+                {
+                    "error": str(exc),
+                    "smtp_configured": smtp_configured(),
+                },
+                status=503,
+            )
+            return
+        self.send_json({"sent": True, "smtp_configured": smtp_configured()})
+
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         query = urllib.parse.parse_qs(parsed.query)
@@ -2493,6 +2567,14 @@ class PaperTrackerHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/subscribers/clear":
             try:
                 self.handle_clear_subscribers()
+            except Exception as exc:
+                self.send_json({"error": str(exc)}, status=500)
+            return
+        if parsed.path == "/api/notifications/test-email":
+            try:
+                self.handle_test_email()
+            except json.JSONDecodeError:
+                self.send_json({"error": "Invalid JSON body"}, status=400)
             except Exception as exc:
                 self.send_json({"error": str(exc)}, status=500)
             return
