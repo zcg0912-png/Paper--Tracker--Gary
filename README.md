@@ -25,6 +25,9 @@ export PAPER_TRACKER_PASSWORD="your_password"
 python3 paper_tracker.py serve --port 8765
 ```
 
+The public page does not include a manual update button. Updates should be
+triggered by the protected Cron endpoint.
+
 ## What it stores
 
 - journal
@@ -111,7 +114,8 @@ The app reads Railway's `PORT` environment variable automatically.
 PAPER_TRACKER_PUBLIC_URL=https://papers.example.com
 ```
 
-8. Add a Railway Cron service for daily updates with this command:
+8. Add a Railway Cron service for daily updates at 6:00 every morning with
+   this command:
 
 ```bash
 python3 paper_tracker.py trigger-remote-fetch

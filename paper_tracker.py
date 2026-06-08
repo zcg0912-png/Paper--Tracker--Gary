@@ -590,7 +590,7 @@ INDEX_HTML = r"""
     .toolbar {
       display: grid;
       gap: 10px;
-      grid-template-columns: minmax(220px, 1.2fr) minmax(220px, 1fr) 150px 112px;
+      grid-template-columns: minmax(220px, 1.2fr) minmax(220px, 1fr) 150px;
     }
     input, select, button {
       border: 1px solid var(--line);
@@ -714,7 +714,6 @@ INDEX_HTML = r"""
           <option value="180">最近 180 天</option>
           <option value="365">最近 365 天</option>
         </select>
-        <button id="refresh">更新</button>
       </div>
     </div>
   </header>
@@ -733,7 +732,6 @@ INDEX_HTML = r"""
       query: document.getElementById('query'),
       journal: document.getElementById('journal'),
       days: document.getElementById('days'),
-      refresh: document.getElementById('refresh'),
       papers: document.getElementById('papers'),
       count: document.getElementById('count'),
       latest: document.getElementById('latest'),
@@ -777,7 +775,7 @@ INDEX_HTML = r"""
         `<strong>${papers.length}</strong> 篇文章`;
       els.latest.textContent = data.latest ? `最新：${data.latest}` : '';
       els.papers.innerHTML = papers.length ? papers.map(renderPaper).join('') :
-        '<div class="empty">暂无记录。点击更新抓取最新文章。</div>';
+        '<div class="empty">暂无记录。等待每日自动更新完成。</div>';
       els.status.textContent = data.fetched_at ? `更新于：${data.fetched_at}` : '';
     }
 
@@ -801,26 +799,6 @@ INDEX_HTML = r"""
       `;
     }
 
-    async function refreshData() {
-      els.refresh.disabled = true;
-      els.status.textContent = '正在抓取...';
-      try {
-        const res = await fetch('/api/fetch?days=365&pages=2&per_page=50', {
-          method: 'POST'
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Fetch failed');
-        els.status.textContent =
-          `抓取 ${data.seen} 条，新增 ${data.inserted} 条`;
-        await loadJournals();
-        await loadPapers();
-      } catch (err) {
-        els.status.textContent = err.message;
-      } finally {
-        els.refresh.disabled = false;
-      }
-    }
-
     let timer = null;
     els.query.addEventListener('input', () => {
       clearTimeout(timer);
@@ -828,7 +806,6 @@ INDEX_HTML = r"""
     });
     els.journal.addEventListener('change', loadPapers);
     els.days.addEventListener('change', loadPapers);
-    els.refresh.addEventListener('click', refreshData);
 
     (async function init() {
       await loadJournals();
@@ -991,6 +968,9 @@ class PaperTrackerHandler(BaseHTTPRequestHandler):
             return
         if parsed.path != "/api/fetch":
             self.send_error(404)
+            return
+        if not self.is_cron_authorized(query):
+            self.send_json({"error": "Fetch is not authorized"}, status=403)
             return
         try:
             self.handle_fetch(query)
