@@ -538,34 +538,47 @@ INDEX_HTML = r"""
   <style>
     :root {
       color-scheme: light;
-      --bg: #f5f7fa;
+      --bg: #f6f8fb;
       --panel: #ffffff;
-      --line: #d9dee7;
-      --text: #17202a;
-      --muted: #657386;
+      --panel-soft: #f1f5f9;
+      --line: #dbe2ea;
+      --line-strong: #c7d2df;
+      --text: #152033;
+      --muted: #66758a;
+      --soft: #eef3f8;
       --accent: #0f766e;
-      --accent-2: #b45309;
-      --focus: rgba(15, 118, 110, 0.18);
+      --accent-dark: #0b5954;
+      --accent-soft: #e3f3f0;
+      --blue: #2563eb;
+      --blue-soft: #e8f0ff;
+      --gold: #a15c07;
+      --gold-soft: #fff4db;
+      --focus: rgba(37, 99, 235, 0.18);
+      --shadow: 0 16px 44px rgba(24, 39, 75, 0.08);
     }
     * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
     body {
       margin: 0;
       background: var(--bg);
       color: var(--text);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       font-size: 15px;
-      line-height: 1.45;
+      line-height: 1.6;
+      text-rendering: optimizeLegibility;
     }
+    a { color: inherit; }
     header {
-      background: var(--panel);
+      background: rgba(255, 255, 255, 0.94);
       border-bottom: 1px solid var(--line);
-      padding: 18px 24px;
+      backdrop-filter: blur(18px);
+      padding: 18px 24px 16px;
       position: sticky;
       top: 0;
-      z-index: 2;
+      z-index: 5;
     }
     .wrap {
-      max-width: 1180px;
+      max-width: 1320px;
       margin: 0 auto;
     }
     .top {
@@ -573,72 +586,203 @@ INDEX_HTML = r"""
       display: flex;
       gap: 16px;
       justify-content: space-between;
-      margin-bottom: 14px;
+      margin-bottom: 16px;
     }
+    .brand { min-width: 0; }
     h1 {
-      font-size: 22px;
-      font-weight: 700;
+      font-size: 24px;
+      font-weight: 800;
       letter-spacing: 0;
       margin: 0;
+    }
+    .subtitle {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 2px;
     }
     .status {
       color: var(--muted);
       font-size: 13px;
       min-height: 20px;
       text-align: right;
+      white-space: nowrap;
     }
     .toolbar {
       display: grid;
-      gap: 10px;
-      grid-template-columns: minmax(220px, 1.2fr) minmax(220px, 1fr) 150px;
+      gap: 12px;
+      grid-template-columns: minmax(280px, 1.4fr) minmax(220px, 0.8fr) 170px;
+    }
+    .field {
+      min-width: 0;
+      position: relative;
+    }
+    .field-label {
+      color: var(--muted);
+      display: block;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1;
+      margin-bottom: 6px;
     }
     input, select, button {
+      background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 8px;
+      color: var(--text);
       font: inherit;
-      min-height: 40px;
+      min-height: 42px;
       outline: none;
-      padding: 8px 10px;
+      padding: 9px 11px;
       width: 100%;
     }
     input:focus, select:focus, button:focus {
       box-shadow: 0 0 0 4px var(--focus);
-      border-color: var(--accent);
+      border-color: var(--blue);
     }
     button {
-      background: var(--accent);
-      border-color: var(--accent);
+      background: var(--blue);
+      border-color: var(--blue);
       color: #fff;
       cursor: pointer;
       font-weight: 650;
     }
-    button:disabled {
-      cursor: wait;
-      opacity: 0.62;
-    }
     main {
-      padding: 22px 24px 48px;
+      padding: 24px 24px 56px;
     }
-    .summary {
-      align-items: center;
+    .layout {
+      align-items: start;
+      display: grid;
+      gap: 18px;
+      grid-template-columns: 300px minmax(0, 1fr);
+    }
+    .sidebar {
+      display: grid;
+      gap: 14px;
+      position: sticky;
+      top: 122px;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+    .stats {
+      display: grid;
+      gap: 0;
+      grid-template-columns: 1fr;
+      overflow: hidden;
+    }
+    .stat {
+      min-width: 0;
+      padding: 16px;
+    }
+    .stat + .stat {
+      border-top: 1px solid var(--line);
+    }
+    .stat-label {
       color: var(--muted);
-      display: flex;
-      gap: 12px;
-      justify-content: space-between;
-      margin-bottom: 14px;
+      font-size: 12px;
+      font-weight: 700;
+      margin-bottom: 3px;
     }
-    .summary strong {
+    .stat-value {
       color: var(--text);
+      font-size: 22px;
+      font-weight: 800;
+      line-height: 1.15;
+      overflow-wrap: anywhere;
+    }
+    .journal-panel {
+      max-height: calc(100vh - 230px);
+      overflow: auto;
+      padding: 8px;
+    }
+    .journal-button {
+      align-items: center;
+      background: transparent;
+      border: 0;
+      border-radius: 7px;
+      color: var(--text);
+      cursor: pointer;
+      display: grid;
+      gap: 8px;
+      grid-template-columns: minmax(0, 1fr) auto;
+      min-height: 38px;
+      padding: 8px 10px;
+      text-align: left;
+      width: 100%;
+    }
+    .journal-button:hover {
+      background: var(--panel-soft);
+    }
+    .journal-button.is-active {
+      background: var(--accent-soft);
+      color: var(--accent-dark);
+      font-weight: 750;
+    }
+    .journal-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .journal-count {
+      color: var(--muted);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+    .journal-button.is-active .journal-count {
+      color: var(--accent-dark);
     }
     .paper-list {
       display: grid;
-      gap: 12px;
+      gap: 14px;
+    }
+    .results-head {
+      align-items: end;
+      display: flex;
+      gap: 16px;
+      justify-content: space-between;
+      margin-bottom: 14px;
+      min-height: 36px;
+    }
+    .summary {
+      min-width: 0;
+    }
+    .summary-title {
+      color: var(--text);
+      font-size: 18px;
+      font-weight: 800;
+      line-height: 1.25;
+      margin: 0;
+      overflow-wrap: anywhere;
+    }
+    .summary-subtitle {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 3px;
+    }
+    .latest {
+      color: var(--gold);
+      flex: 0 0 auto;
+      font-size: 13px;
+      font-weight: 700;
+      text-align: right;
     }
     .paper {
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 8px;
-      padding: 16px;
+      box-shadow: var(--shadow);
+      display: grid;
+      gap: 10px;
+      padding: 18px 20px;
+      transition: border-color 160ms ease, transform 160ms ease;
+    }
+    .paper:hover {
+      border-color: var(--line-strong);
+      transform: translateY(-1px);
     }
     .paper-meta {
       align-items: center;
@@ -646,22 +790,41 @@ INDEX_HTML = r"""
       display: flex;
       flex-wrap: wrap;
       font-size: 13px;
-      gap: 8px;
-      margin-bottom: 8px;
+      gap: 7px;
+      line-height: 1.25;
+    }
+    .chip {
+      align-items: center;
+      border-radius: 999px;
+      display: inline-flex;
+      font-weight: 700;
+      gap: 4px;
+      max-width: 100%;
+      min-height: 24px;
+      padding: 4px 9px;
     }
     .journal {
-      color: var(--accent);
-      font-weight: 700;
+      background: var(--accent-soft);
+      color: var(--accent-dark);
     }
     .date {
-      color: var(--accent-2);
+      background: var(--gold-soft);
+      color: var(--gold);
+    }
+    .doi {
+      background: var(--blue-soft);
+      color: var(--blue);
       font-weight: 650;
+      max-width: 100%;
+      overflow-wrap: anywhere;
     }
     h2 {
-      font-size: 18px;
+      font-size: 20px;
       letter-spacing: 0;
-      line-height: 1.32;
-      margin: 0 0 8px;
+      line-height: 1.35;
+      margin: 0;
+      max-width: 50rem;
+      overflow-wrap: anywhere;
     }
     h2 a {
       color: var(--text);
@@ -672,28 +835,161 @@ INDEX_HTML = r"""
       text-decoration: underline;
     }
     .authors {
-      color: #39475a;
+      color: #3d4b60;
       font-size: 14px;
-      margin-bottom: 10px;
+      line-height: 1.45;
+      max-width: 65rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .paper-body {
+      border-top: 1px solid var(--line);
+      display: grid;
+      gap: 8px;
+      padding-top: 10px;
     }
     .abstract {
-      color: #2d3746;
+      color: #304057;
       margin: 0;
-      max-width: 90ch;
+      max-width: 72ch;
+      overflow-wrap: anywhere;
+    }
+    .abstract-preview {
+      color: #304057;
+      display: -webkit-box;
+      margin: 0;
+      max-width: 72ch;
+      overflow: hidden;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 3;
+    }
+    .abstract-full {
+      max-width: 72ch;
+    }
+    .abstract-block {
+      display: grid;
+      gap: 8px;
+      max-width: 72ch;
+    }
+    .text-button {
+      background: transparent;
+      border: 0;
+      border-radius: 4px;
+      color: var(--blue);
+      cursor: pointer;
+      display: inline-flex;
+      font-size: 13px;
+      font-weight: 750;
+      min-height: 28px;
+      padding: 0;
+      text-align: left;
+      width: auto;
+    }
+    .text-button:hover {
+      text-decoration: underline;
+    }
+    .paper-actions {
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 2px;
+    }
+    .text-link {
+      align-items: center;
+      color: var(--blue);
+      display: inline-flex;
+      font-size: 13px;
+      font-weight: 750;
+      gap: 5px;
+      min-height: 28px;
+      text-decoration: none;
+    }
+    .text-link:hover {
+      text-decoration: underline;
+    }
+    .muted-note {
+      color: var(--muted);
+      font-size: 13px;
     }
     .empty {
       background: var(--panel);
       border: 1px dashed var(--line);
       border-radius: 8px;
       color: var(--muted);
-      padding: 30px;
+      padding: 36px 24px;
       text-align: center;
     }
-    @media (max-width: 860px) {
-      .top { align-items: flex-start; flex-direction: column; }
-      .status { text-align: left; }
-      .toolbar { grid-template-columns: 1fr; }
-      header { position: static; }
+    .is-hidden {
+      display: none;
+    }
+    @media (max-width: 1040px) {
+      .layout { grid-template-columns: 1fr; }
+      .sidebar {
+        position: static;
+      }
+      .journal-panel {
+        display: none;
+      }
+      .stats {
+        grid-template-columns: repeat(3, 1fr);
+      }
+      .stat + .stat {
+        border-left: 1px solid var(--line);
+        border-top: 0;
+      }
+      .toolbar {
+        grid-template-columns: minmax(240px, 1fr) minmax(190px, 0.75fr) 150px;
+      }
+    }
+    @media (max-width: 760px) {
+      header {
+        padding: 16px;
+        position: static;
+      }
+      main {
+        padding: 16px 16px 42px;
+      }
+      .top {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .status {
+        text-align: left;
+        white-space: normal;
+      }
+      .toolbar {
+        grid-template-columns: 1fr;
+      }
+      .stats {
+        grid-template-columns: 1fr;
+      }
+      .stat + .stat {
+        border-left: 0;
+        border-top: 1px solid var(--line);
+      }
+      .results-head {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .latest {
+        text-align: left;
+      }
+      .paper {
+        padding: 16px;
+      }
+      h1 {
+        font-size: 22px;
+      }
+      h2 {
+        font-size: 18px;
+      }
+      .authors {
+        white-space: normal;
+      }
     }
   </style>
 </head>
@@ -701,47 +997,124 @@ INDEX_HTML = r"""
   <header>
     <div class="wrap">
       <div class="top">
-        <h1>论文追索</h1>
+        <div class="brand">
+          <h1>论文追索</h1>
+          <div class="subtitle">把最近论文按期刊、日期和关键词整理成可读清单</div>
+        </div>
         <div class="status" id="status"></div>
       </div>
       <div class="toolbar">
-        <input id="query" type="search" placeholder="搜索标题、作者、摘要">
-        <select id="journal"></select>
-        <select id="days">
-          <option value="0">全部日期</option>
-          <option value="30">最近 30 天</option>
-          <option value="90">最近 90 天</option>
-          <option value="180">最近 180 天</option>
-          <option value="365">最近 365 天</option>
-        </select>
+        <label class="field">
+          <span class="field-label">关键词</span>
+          <input id="query" type="search" placeholder="搜索标题、作者、摘要">
+        </label>
+        <label class="field">
+          <span class="field-label">期刊</span>
+          <select id="journal"></select>
+        </label>
+        <label class="field">
+          <span class="field-label">时间</span>
+          <select id="days">
+            <option value="0">全部日期</option>
+            <option value="30">最近 30 天</option>
+            <option value="90">最近 90 天</option>
+            <option value="180">最近 180 天</option>
+            <option value="365">最近 365 天</option>
+          </select>
+        </label>
       </div>
     </div>
   </header>
   <main>
     <div class="wrap">
-      <div class="summary">
-        <div id="count"></div>
-        <div id="latest"></div>
+      <div class="layout">
+        <aside class="sidebar" aria-label="期刊概览">
+          <section class="panel stats">
+            <div class="stat">
+              <div class="stat-label">总记录</div>
+              <div class="stat-value" id="stat-total">0</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">已收录期刊</div>
+              <div class="stat-value" id="stat-journals">0</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">当前显示</div>
+              <div class="stat-value" id="stat-visible">0</div>
+            </div>
+          </section>
+          <nav class="panel journal-panel" id="journal-list"></nav>
+        </aside>
+        <section class="results" aria-label="论文列表">
+          <div class="results-head">
+            <div class="summary">
+              <h2 class="summary-title" id="count"></h2>
+              <div class="summary-subtitle" id="active-filter"></div>
+            </div>
+            <div class="latest" id="latest"></div>
+          </div>
+          <div class="paper-list" id="papers"></div>
+        </section>
       </div>
-      <div class="paper-list" id="papers"></div>
     </div>
   </main>
   <script>
-    const state = { journals: [] };
+    const state = { journals: [], selectedJournal: '' };
     const els = {
       query: document.getElementById('query'),
       journal: document.getElementById('journal'),
       days: document.getElementById('days'),
       papers: document.getElementById('papers'),
       count: document.getElementById('count'),
+      activeFilter: document.getElementById('active-filter'),
       latest: document.getElementById('latest'),
-      status: document.getElementById('status')
+      status: document.getElementById('status'),
+      journalList: document.getElementById('journal-list'),
+      statTotal: document.getElementById('stat-total'),
+      statJournals: document.getElementById('stat-journals'),
+      statVisible: document.getElementById('stat-visible')
     };
 
     function escapeHtml(value) {
       return String(value || '').replace(/[&<>"']/g, ch => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
       })[ch]);
+    }
+
+    function formatNumber(value) {
+      return new Intl.NumberFormat('zh-CN').format(Number(value || 0));
+    }
+
+    function formatDate(value) {
+      if (!value) return '';
+      const parsed = new Date(`${value}T00:00:00`);
+      if (Number.isNaN(parsed.getTime())) return value;
+      return parsed.toLocaleDateString('zh-CN', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric'
+      });
+    }
+
+    function splitAuthors(value) {
+      return String(value || '')
+        .split(';')
+        .map(name => name.trim())
+        .filter(Boolean);
+    }
+
+    function truncateText(value, maxLength) {
+      const text = String(value || '').replace(/\s+/g, ' ').trim();
+      if (text.length <= maxLength) return text;
+      const slice = text.slice(0, maxLength);
+      const sentenceEnd = Math.max(
+        slice.lastIndexOf('. '),
+        slice.lastIndexOf('。'),
+        slice.lastIndexOf('? '),
+        slice.lastIndexOf('! ')
+      );
+      const cut = sentenceEnd > 120 ? sentenceEnd + 1 : slice.lastIndexOf(' ');
+      return `${slice.slice(0, cut > 80 ? cut : maxLength).trim()}...`;
     }
 
     function params() {
@@ -762,49 +1135,129 @@ INDEX_HTML = r"""
           const label = `${j.name}${count ? ` (${count})` : ''}`;
           return `<option value="${escapeHtml(j.name)}">${escapeHtml(label)}</option>`;
         }).join('');
+      renderJournalList();
+      renderJournalStats();
+    }
+
+    function renderJournalStats() {
+      const total = state.journals.reduce((sum, j) => sum + Number(j.paper_count || 0), 0);
+      const active = state.journals.filter(j => Number(j.paper_count || 0) > 0).length;
+      els.statTotal.textContent = formatNumber(total);
+      els.statJournals.textContent = formatNumber(active);
+    }
+
+    function renderJournalList() {
+      const rows = [
+        { name: '', label: '全部期刊', paper_count: state.journals.reduce((sum, j) => sum + Number(j.paper_count || 0), 0) },
+        ...state.journals
+      ];
+      els.journalList.innerHTML = rows.map(j => {
+        const name = j.name || '';
+        const label = j.label || j.name;
+        const active = name === state.selectedJournal ? ' is-active' : '';
+        return `
+          <button class="journal-button${active}" type="button" data-journal="${escapeHtml(name)}">
+            <span class="journal-name">${escapeHtml(label)}</span>
+            <span class="journal-count">${formatNumber(j.paper_count || 0)}</span>
+          </button>
+        `;
+      }).join('');
+    }
+
+    function activeFilterLabel(total) {
+      const parts = [];
+      if (els.journal.value) parts.push(els.journal.value);
+      if (els.days.value !== '0') parts.push(els.days.options[els.days.selectedIndex].text);
+      if (els.query.value.trim()) parts.push(`包含 "${els.query.value.trim()}"`);
+      return parts.length ? parts.join(' / ') : `全部收录记录，共 ${formatNumber(total)} 篇`;
     }
 
     async function loadPapers() {
-      els.status.textContent = '加载中...';
+      els.status.textContent = '正在整理列表...';
       const res = await fetch(`/api/papers?${params().toString()}`);
       const data = await res.json();
       const papers = data.papers || [];
       const total = Number(data.total || papers.length);
-      els.count.innerHTML = total > papers.length ?
-        `<strong>${papers.length}</strong> / ${total} 篇文章` :
-        `<strong>${papers.length}</strong> 篇文章`;
-      els.latest.textContent = data.latest ? `最新：${data.latest}` : '';
+      els.count.textContent = total > papers.length ?
+        `显示 ${formatNumber(papers.length)} / ${formatNumber(total)} 篇文章` :
+        `${formatNumber(papers.length)} 篇文章`;
+      els.activeFilter.textContent = activeFilterLabel(total);
+      els.latest.textContent = data.latest ? `最新：${formatDate(data.latest)}` : '';
+      els.statVisible.textContent = formatNumber(papers.length);
       els.papers.innerHTML = papers.length ? papers.map(renderPaper).join('') :
-        '<div class="empty">暂无记录。等待每日自动更新完成。</div>';
-      els.status.textContent = data.fetched_at ? `更新于：${data.fetched_at}` : '';
+        '<div class="empty">暂无记录。可以换个关键词、期刊或时间范围再看。</div>';
+      els.status.textContent = data.fetched_at ? `数据更新于 ${data.fetched_at}` : '列表已就绪';
     }
 
     function renderPaper(paper) {
       const title = escapeHtml(paper.title || 'Untitled');
       const url = escapeHtml(paper.article_url || '#');
-      const abstract = paper.abstract ?
-        `<p class="abstract">${escapeHtml(paper.abstract)}</p>` :
-        '<p class="abstract">数据源暂无摘要。</p>';
+      const authors = splitAuthors(paper.authors);
+      const authorText = authors.length ? authors.join(', ') : '作者未知';
+      const abstractText = String(paper.abstract || '').replace(/\s+/g, ' ').trim();
+      const hasLongAbstract = abstractText.length > 320;
+      const preview = hasLongAbstract ? truncateText(abstractText, 300) : abstractText;
+      const abstract = abstractText ? (
+        hasLongAbstract ?
+          `<div class="abstract-block" data-expanded="false">
+            <p class="abstract-preview">${escapeHtml(preview)}</p>
+            <p class="abstract abstract-full is-hidden">${escapeHtml(abstractText)}</p>
+            <button class="text-button" type="button" data-toggle-abstract>展开摘要</button>
+          </div>` :
+          `<p class="abstract">${escapeHtml(abstractText)}</p>`
+      ) : '<div class="muted-note">数据源暂无摘要。</div>';
+      const doi = paper.doi ? `<span class="chip doi">DOI ${escapeHtml(paper.doi)}</span>` : '';
       return `
         <article class="paper">
           <div class="paper-meta">
-            <span class="journal">${escapeHtml(paper.journal)}</span>
-            <span class="date">${escapeHtml(paper.publication_date || '')}</span>
-            ${paper.doi ? `<span>DOI ${escapeHtml(paper.doi)}</span>` : ''}
+            <span class="chip journal">${escapeHtml(paper.journal)}</span>
+            ${paper.publication_date ? `<span class="chip date">${escapeHtml(formatDate(paper.publication_date))}</span>` : ''}
+            ${doi}
           </div>
           <h2><a href="${url}" target="_blank" rel="noopener noreferrer">${title}</a></h2>
-          <div class="authors">${escapeHtml(paper.authors || '作者未知')}</div>
-          ${abstract}
+          <div class="authors">${escapeHtml(authorText)}</div>
+          <div class="paper-body">
+            ${abstract}
+            <div class="paper-actions">
+              <a class="text-link" href="${url}" target="_blank" rel="noopener noreferrer">打开原文</a>
+            </div>
+          </div>
         </article>
       `;
     }
+
+    els.journalList.addEventListener('click', event => {
+      const button = event.target.closest('[data-journal]');
+      if (!button) return;
+      state.selectedJournal = button.dataset.journal || '';
+      els.journal.value = state.selectedJournal;
+      renderJournalList();
+      loadPapers();
+    });
+
+    els.papers.addEventListener('click', event => {
+      const button = event.target.closest('[data-toggle-abstract]');
+      if (!button) return;
+      const block = button.closest('.abstract-block');
+      const preview = block.querySelector('.abstract-preview');
+      const full = block.querySelector('.abstract-full');
+      const nextExpanded = block.dataset.expanded !== 'true';
+      block.dataset.expanded = String(nextExpanded);
+      preview.classList.toggle('is-hidden', nextExpanded);
+      full.classList.toggle('is-hidden', !nextExpanded);
+      button.textContent = nextExpanded ? '收起摘要' : '展开摘要';
+    });
 
     let timer = null;
     els.query.addEventListener('input', () => {
       clearTimeout(timer);
       timer = setTimeout(loadPapers, 250);
     });
-    els.journal.addEventListener('change', loadPapers);
+    els.journal.addEventListener('change', () => {
+      state.selectedJournal = els.journal.value;
+      renderJournalList();
+      loadPapers();
+    });
     els.days.addEventListener('change', loadPapers);
 
     (async function init() {
