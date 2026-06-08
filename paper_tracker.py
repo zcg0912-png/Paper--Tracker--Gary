@@ -27,7 +27,7 @@ DEFAULT_DB = ROOT / "papers.db"
 DEFAULT_JOURNALS = ROOT / "journals.csv"
 OPENALEX_URL = "https://api.openalex.org/works"
 HBR_FEED_URL = "http://feeds.harvardbusiness.org/harvardbusiness"
-OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
+DEEPL_FREE_API_URL = "https://api-free.deepl.com"
 TAG_RE = re.compile(r"<[^>]+>")
 AUTH_REALM = "Paper Tracker"
 
@@ -60,8 +60,27 @@ def configured_port(default: int = 8765) -> int:
     return int(value)
 
 
-def configured_translate_model() -> str:
-    return os.getenv("PAPER_TRACKER_TRANSLATE_MODEL", "gpt-4o-mini")
+def configured_deepl_api_url(api_key: str) -> str:
+    value = os.getenv("DEEPL_API_URL", "").strip()
+    if value:
+        return value.rstrip("/")
+    if api_key and not api_key.endswith(":fx"):
+        return "https://api.deepl.com"
+    return DEEPL_FREE_API_URL
+
+
+def configured_deepl_target_lang() -> str:
+    return os.getenv("DEEPL_TARGET_LANG", "ZH").strip().upper()
+
+
+def configured_deepl_source_lang() -> str:
+    return os.getenv("DEEPL_SOURCE_LANG", "EN").strip().upper()
+
+
+def configured_deepl_model_label() -> str:
+    source = configured_deepl_source_lang() or "auto"
+    target = configured_deepl_target_lang()
+    return f"deepl:{source.lower()}-{target.lower()}"
 
 
 def load_journals(path: Path = DEFAULT_JOURNALS) -> list[dict[str, str]]:
@@ -241,61 +260,34 @@ def request_remote_fetch(base_url: str, secret: str) -> dict:
         raise RuntimeError(f"Remote fetch request failed: {exc}") from exc
 
 
-def request_openai_translation(
+def request_deepl_translation(
     *,
     title: str,
     abstract: str,
-    model: str,
 ) -> dict[str, str]:
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    api_key = os.getenv("DEEPL_API_KEY", "").strip()
     if not api_key:
-        raise TranslationConfigError("Translation requires OPENAI_API_KEY")
-    source = {"title": title, "abstract": abstract}
-    schema = {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "title_zh": {
-                "type": "string",
-                "description": "A concise Simplified Chinese translation of the title.",
-            },
-            "abstract_zh": {
-                "type": "string",
-                "description": "A faithful Simplified Chinese translation of the abstract.",
-            },
-        },
-        "required": ["title_zh", "abstract_zh"],
-    }
+        raise TranslationConfigError("Translation requires DEEPL_API_KEY")
+    texts = [title]
+    if abstract:
+        texts.append(abstract)
     body = {
-        "model": model,
-        "instructions": (
-            "你是严谨的学术论文翻译助手。请把论文标题和摘要翻译为简体中文，"
-            "保留学术术语、机构名、人名和变量含义，不要加入解释、评价或 Markdown。"
-            "如果摘要为空，abstract_zh 返回空字符串。"
-        ),
-        "input": json.dumps(source, ensure_ascii=False),
-        "text": {
-            "format": {
-                "type": "json_schema",
-                "name": "paper_translation",
-                "schema": schema,
-                "strict": True,
-            }
-        },
-        "max_output_tokens": 1800,
-        "store": False,
+        "text": texts,
+        "target_lang": configured_deepl_target_lang(),
     }
+    source_lang = configured_deepl_source_lang()
+    if source_lang:
+        body["source_lang"] = source_lang
+    if abstract:
+        body["context"] = abstract[:4000]
     headers = {
         "Accept": "application/json",
-        "Authorization": f"Bearer {api_key}",
+        "Authorization": f"DeepL-Auth-Key {api_key}",
         "Content-Type": "application/json",
         "User-Agent": os.getenv("PAPER_TRACKER_USER_AGENT", "paper-tracker/0.1"),
     }
-    project = os.getenv("OPENAI_PROJECT", "").strip()
-    if project:
-        headers["OpenAI-Project"] = project
     request = urllib.request.Request(
-        OPENAI_RESPONSES_URL,
+        f"{configured_deepl_api_url(api_key)}/v2/translate",
         data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
         headers=headers,
         method="POST",
@@ -305,37 +297,20 @@ def request_openai_translation(
             payload = json.load(response)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"OpenAI HTTP {exc.code}: {detail}") from exc
+        raise RuntimeError(f"DeepL HTTP {exc.code}: {detail}") from exc
     except urllib.error.URLError as exc:
-        raise RuntimeError(f"OpenAI request failed: {exc}") from exc
-    text = extract_openai_text(payload)
-    try:
-        translated = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("OpenAI returned an invalid translation payload") from exc
+        raise RuntimeError(f"DeepL request failed: {exc}") from exc
+    translations = payload.get("translations") or []
+    if not translations:
+        raise RuntimeError("DeepL did not return a title translation")
+    if abstract and len(translations) < 2:
+        raise RuntimeError("DeepL did not return an abstract translation")
     return {
-        "title_zh": str(translated.get("title_zh") or "").strip(),
-        "abstract_zh": str(translated.get("abstract_zh") or "").strip(),
+        "title_zh": str(translations[0].get("text") or "").strip(),
+        "abstract_zh": (
+            str(translations[1].get("text") or "").strip() if abstract else ""
+        ),
     }
-
-
-def extract_openai_text(payload: dict) -> str:
-    direct = payload.get("output_text")
-    if isinstance(direct, str) and direct.strip():
-        return direct.strip()
-    parts: list[str] = []
-    for item in payload.get("output") or []:
-        for content in item.get("content") or []:
-            if content.get("type") in {"output_text", "text"}:
-                text = content.get("text")
-                if text:
-                    parts.append(text)
-    text = "".join(parts).strip()
-    if not text:
-        error = payload.get("error") or {}
-        message = error.get("message") if isinstance(error, dict) else ""
-        raise RuntimeError(message or "OpenAI did not return translation text")
-    return text
 
 
 def clean_html(value: str | None) -> str:
@@ -643,6 +618,7 @@ def cached_translation(
     db_path: Path,
     paper_key: str,
     source_hash: str,
+    model: str,
 ) -> dict | None:
     init_db(db_path)
     with sqlite3.connect(db_path) as conn:
@@ -651,9 +627,9 @@ def cached_translation(
                 """
                 SELECT paper_key, title_zh, abstract_zh, model, translated_at
                 FROM paper_translations
-                WHERE paper_key = ? AND source_hash = ?
+                WHERE paper_key = ? AND source_hash = ? AND model = ?
                 """,
-                (paper_key, source_hash),
+                (paper_key, source_hash, model),
             )
         )
     return rows[0] if rows else None
@@ -706,16 +682,15 @@ def translate_paper(
     title = paper.get("title") or ""
     abstract = paper.get("abstract") or ""
     source_hash = paper_source_hash(title, abstract)
+    model = configured_deepl_model_label()
     if not refresh:
-        cached = cached_translation(db_path, paper_key, source_hash)
+        cached = cached_translation(db_path, paper_key, source_hash, model)
         if cached:
             cached["cached"] = True
             return cached
-    model = configured_translate_model()
-    translated = request_openai_translation(
+    translated = request_deepl_translation(
         title=title,
         abstract=abstract,
-        model=model,
     )
     return save_translation(
         db_path=db_path,
@@ -1550,7 +1525,7 @@ INDEX_HTML = r"""
         const data = await res.json();
         if (!res.ok) {
           const message = data.needs_configuration ?
-            '需要先在部署环境配置 OPENAI_API_KEY，之后再点击翻译。' :
+            '需要先在部署环境配置 DEEPL_API_KEY，之后再点击翻译。' :
             (data.error || '翻译请求失败');
           throw new Error(message);
         }
